@@ -217,11 +217,15 @@ function makeRouter(devs) {
       const r = segIntersect(segs[i][0], segs[i][1], segs[j][0], segs[j][1]);
       if (r) { splits[i].push(r.t); splits[j].push(r.u); }
     }
-  const drop = new Map();
+  // อุปกรณ์เชื่อมเข้าขอบอาคารได้หลายเส้น (สูงสุด 4 เส้นที่ระยะใกล้เคียงกับเส้นที่ใกล้สุด)
+  const drops = [];
   devs.forEach(d => {
-    const n = nearestOnSegments(d, segs);
-    splits[n.segIdx].push(n.t);
-    drop.set(keyOf(d), n.proj);
+    const projs = segs.map((s, i) => ({ i, ...projToSeg(d, s[0], s[1]) })).sort((x, y) => x.d - y.d);
+    const lim = projs[0].d * 1.8 + (state.pxPerM ? 10 * state.pxPerM : 30);
+    projs.filter(p => p.d <= lim).slice(0, 4).forEach(p => {
+      splits[p.i].push(p.t);
+      drops.push([d, p.proj]);
+    });
   });
   const adj = new Map();
   const node = p => { const k = keyOf(p); if (!adj.has(k)) adj.set(k, { p: { x: p.x, y: p.y }, e: [] }); return k; };
@@ -239,11 +243,13 @@ function makeRouter(devs) {
       edge(at(ts[m - 1]), at(ts[m]));
     }
   });
-  devs.forEach(d => edge(d, drop.get(keyOf(d))));
+  drops.forEach(([d, pr]) => edge(d, pr));
 
   const cache = new Map();
-  function dijkstra(srcK) {
-    if (cache.has(srcK)) return cache.get(srcK);
+  const edgeKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+  // penal: Map edgeKey → ตัวคูณน้ำหนัก ใช้กดเส้นทางเดิมเพื่อหาเส้นทางสำรอง
+  function dijkstra(srcK, penal) {
+    if (!penal && cache.has(srcK)) return cache.get(srcK);
     const distM = new Map(), prev = new Map();
     const pq = [[0, srcK]];
     distM.set(srcK, 0);
@@ -252,16 +258,30 @@ function makeRouter(devs) {
       const [dc, k] = pq.shift();
       if (dc > (distM.has(k) ? distM.get(k) : Infinity)) continue;
       for (const [nk, w] of adj.get(k).e) {
-        const nd = dc + w;
+        const nd = dc + (penal ? w * (penal.get(edgeKey(k, nk)) || 1) : w);
         if (nd < (distM.has(nk) ? distM.get(nk) : Infinity)) {
           distM.set(nk, nd); prev.set(nk, k); pq.push([nd, nk]);
         }
       }
     }
     const r = { distM, prev };
-    cache.set(srcK, r);
+    if (!penal) cache.set(srcK, r);
     return r;
   }
+  function rawPath(ka, kb, penal) {
+    const { distM, prev } = dijkstra(ka, penal);
+    if (!distM.has(kb)) return null;
+    const keys = [];
+    let k = kb;
+    while (k !== undefined) { keys.push(k); if (k === ka) break; k = prev.get(k); }
+    return keys.reverse();
+  }
+  const keysLen = keys => {
+    let L = 0;
+    for (let i = 1; i < keys.length; i++) L += dist(adj.get(keys[i - 1]).p, adj.get(keys[i]).p);
+    return L;
+  };
+  const keysPts = keys => simplifyPts(keys.map(k => adj.get(k).p));
   // ลิงก์สั้น (อุปกรณ์ตู้/บริเวณเดียวกัน ≤ ~20 ม.) ต่อตรงโดยไม่อ้อมขอบอาคาร
   const shortPx = () => (state.pxPerM ? 20 * state.pxPerM : 40);
   return {
@@ -270,14 +290,10 @@ function makeRouter(devs) {
       const manLen = polyLenPx(man);
       const ka = keyOf(a), kb = keyOf(b);
       if (ka === kb || !adj.has(ka) || !adj.has(kb)) return man;
-      const { distM, prev } = dijkstra(ka);
-      if (!distM.has(kb)) return man; // กราฟไม่ต่อถึงกัน
-      if (manLen <= shortPx() && manLen < distM.get(kb)) return man;
-      const pts = [];
-      let k = kb;
-      while (k !== undefined) { pts.push(adj.get(k).p); if (k === ka) break; k = prev.get(k); }
-      pts.reverse();
-      return simplifyPts(pts);
+      const keys = rawPath(ka, kb, null);
+      if (!keys) return man; // กราฟไม่ต่อถึงกัน
+      if (manLen <= shortPx() && manLen < keysLen(keys)) return man;
+      return keysPts(keys);
     },
     dist(a, b) {
       const ka = keyOf(a), kb = keyOf(b);
@@ -287,6 +303,37 @@ function makeRouter(devs) {
       const { distM } = dijkstra(ka);
       const g = distM.has(kb) ? distM.get(kb) : manLen * 1.5;
       return (manLen <= shortPx() && manLen < g) ? manLen : g;
+    },
+    // แนวเดินสายทางเลือก: หาเส้นทางสำรองโดยกดน้ำหนักเส้นทางที่พบแล้ว (penalty method)
+    alts(a, b, maxAlt = 3) {
+      const ka = keyOf(a), kb = keyOf(b);
+      const out = [];
+      const push = pts => {
+        if (pts && pts.length >= 2 && !out.some(o => samePath(o.points, pts))) out.push({ points: pts });
+      };
+      if (ka === kb || !adj.has(ka) || !adj.has(kb)) {
+        push(manhattanPts(a, b));
+        if (Math.abs(a.x - b.x) > 1 && Math.abs(a.y - b.y) > 1)
+          push([{ x: a.x, y: a.y }, { x: a.x, y: b.y }, { x: b.x, y: b.y }]);
+        return out;
+      }
+      const base = rawPath(ka, kb, null);
+      if (!base) return out;
+      push(keysPts(base));
+      const baseLen = keysLen(base);
+      const penal = new Map();
+      let prevKeys = base;
+      for (let n = 0; n < maxAlt + 2 && out.length < maxAlt; n++) {
+        for (let i = 1; i < prevKeys.length; i++) {
+          const ek = edgeKey(prevKeys[i - 1], prevKeys[i]);
+          penal.set(ek, (penal.get(ek) || 1) * 4);
+        }
+        const alt = rawPath(ka, kb, penal);
+        if (!alt || keysLen(alt) > baseLen * 2.5 + 1) break; // ยาวเกินไป ไม่คุ้มเป็นทางเลือก
+        push(keysPts(alt));
+        prevKeys = alt;
+      }
+      return out;
     },
   };
 }
@@ -364,6 +411,78 @@ function autoPlaceSwitches() {
   refresh();
   const nP = state.devices.filter(d => d.type === 'psw').length;
   $('#statusHint').textContent = `วางสวิตช์แล้ว: PoE SW ${nP} ตัว (กล้อง ${cams.length} ตัว, ≤8 ตัว/สวิตช์) — ลากย้ายปรับได้ แล้วกด "คำนวณแนวสายอัตโนมัติ"`;
+}
+
+/* ============================================================
+   แนวเดินสายทางเลือก (alternative routes)
+   ============================================================ */
+const ALT_COLORS = ['#a78bfa', '#34d399', '#f472b6'];
+
+function showAlternatives(id) {
+  const r = state.routes.find(x => x.id === id);
+  if (!r) return;
+  const a = deviceById(r.fromId), b = deviceById(r.toId);
+  if (!a || !b) return;
+  const router = makeRouter([{ x: a.x, y: a.y }, { x: b.x, y: b.y }]);
+  const opts = router.alts({ x: a.x, y: a.y }, { x: b.x, y: b.y }, 3)
+    .filter(o => !samePath(o.points, r.points))
+    .slice(0, 3);
+  state.altView = opts.length ? { routeId: id, options: opts } : null;
+  state.selected = { kind: 'route', id };
+  centerOnRoute(r);
+  refresh();
+  $('#statusHint').textContent = opts.length
+    ? `พบแนวทางเลือก ${opts.length} เส้นทาง — คลิกเส้นประบนภาพ หรือปุ่ม "ใช้เส้นนี้" ในตาราง · Esc = ปิด`
+    : 'ไม่พบแนวเดินสายทางเลือกอื่นสำหรับเส้นนี้ — ลองวาดขอบอาคาร/แนวท่อเพิ่ม';
+}
+
+function applyAlt(i) {
+  if (!state.altView) return;
+  const r = state.routes.find(x => x.id === state.altView.routeId);
+  const o = state.altView.options[i];
+  if (!r || !o) { state.altView = null; refresh(); return; }
+  r.points = o.points.map(p => ({ x: p.x, y: p.y }));
+  state.altView = null;
+  refresh();
+  const L = routeLenM(r);
+  $('#statusHint').textContent = `แทนที่แนวเส้น ${routeLabel(r)} ด้วยทางเลือกแล้ว${L != null ? ` (${L.toFixed(0)} ม.)` : ''}`;
+}
+
+function clearAlts() {
+  if (!state.altView) return;
+  state.altView = null;
+  refresh();
+}
+
+function hitAlt(scr) {
+  if (!state.altView) return null;
+  for (let i = 0; i < state.altView.options.length; i++) {
+    const pts = state.altView.options[i].points.map(w2s);
+    for (let j = 1; j < pts.length; j++)
+      if (distToSeg(scr, pts[j - 1], pts[j]) <= 7) return i;
+  }
+  return null;
+}
+
+function renderAltBox() {
+  const box = $('#altBox');
+  if (!state.altView) { box.innerHTML = ''; return; }
+  const r = state.routes.find(x => x.id === state.altView.routeId);
+  if (!r) { state.altView = null; box.innerHTML = ''; return; }
+  const cur = routeLenM(r);
+  box.innerHTML =
+    `<div class="alt-head">🔀 แนวทางเลือกของ ${routeLabel(r)} — เส้นปัจจุบัน ${cur != null ? cur.toFixed(0) + ' ม.' : '—'}</div>` +
+    state.altView.options.map((o, i) => {
+      const L = state.pxPerM ? polyLenPx(o.points) / state.pxPerM : null;
+      return `<div class="alt-item" style="border-left-color:${ALT_COLORS[i % ALT_COLORS.length]}">
+        <span>ทางเลือก ${i + 1} — ${L != null ? L.toFixed(0) + ' ม.' : '—'}</span>
+        <button class="btn" data-usealt="${i}">ใช้เส้นนี้</button>
+      </div>`;
+    }).join('') +
+    `<div class="row"><button class="btn" id="btnCloseAlt">ปิดทางเลือก (Esc)</button></div>`;
+  box.querySelectorAll('button[data-usealt]').forEach(btn =>
+    btn.addEventListener('click', () => applyAlt(+btn.dataset.usealt)));
+  box.querySelector('#btnCloseAlt').addEventListener('click', clearAlts);
 }
 
 /* ============================================================
@@ -512,6 +631,17 @@ function drawScene(g, proj, k, opts = {}) {
     const mid = polyMidpoint(r.points);
     const txt = L != null ? `${r.name || ''}${L.toFixed(0)} ม.` : '— ม.';
     pill(g, proj(mid), txt, cable.color, k);
+  }
+
+  // ---- แนวเดินสายทางเลือก (เส้นประ ชั่วคราว) ----
+  if (opts.screen && state.altView) {
+    state.altView.options.forEach((o, i) => {
+      const color = ALT_COLORS[i % ALT_COLORS.length];
+      strokePoly(g, o.points.map(proj), color, 3 * k, k, false, [10 * k, 6 * k]);
+      const L = state.pxPerM ? polyLenPx(o.points) / state.pxPerM : null;
+      pill(g, proj(polyMidpoint(o.points)),
+        `ทางเลือก ${i + 1}${L != null ? ' · ' + L.toFixed(0) + ' ม.' : ''}`, color, k);
+    });
   }
 
   // ---- draft route ----
@@ -853,7 +983,8 @@ canvas.addEventListener('dblclick', () => {
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key === 'Escape') {
-    if (state.wallDraft) commitWall();
+    if (state.altView) clearAlts();
+    else if (state.wallDraft) commitWall();
     else if (state.draft) { state.draft = null; updateHint(); draw(); }
     else setMode('select');
   }
@@ -938,13 +1069,19 @@ function handleClick(scr) {
       return;
     }
     default: { // select
+      if (state.altView) {
+        const ai = hitAlt(scr);
+        if (ai != null) { applyAlt(ai); return; }
+      }
       const d = hitDevice(scr);
       const r = d ? null : hitRoute(scr);
       const wl = (d || r) ? null : hitWall(scr);
+      if (!d && !r && !wl && state.altView) state.altView = null; // คลิกพื้นที่ว่าง = ปิดทางเลือก
       state.selected = d ? { kind: 'device', id: d.id }
         : r ? { kind: 'route', id: r.id }
         : wl ? { kind: 'wall', id: wl.id } : null;
       renderTable();
+      renderAltBox();
       draw();
     }
   }
@@ -1044,9 +1181,12 @@ $('#btnClear').addEventListener('click', () => {
    results: table / equipment / recommendations
    ============================================================ */
 function refresh() {
+  if (state.altView && !state.routes.some(r => r.id === state.altView.routeId))
+    state.altView = null; // เส้นถูกลบไปแล้ว
   draw();
   renderScaleUI();
   renderTable();
+  renderAltBox();
   renderEquipment();
   renderWarnings();
   renderDevSummary();
@@ -1108,6 +1248,7 @@ function renderTable() {
       <td class="actions">
         <button class="mini move" data-up="${r.id}" title="เลื่อนรายการขึ้น">▲</button>
         <button class="mini move" data-down="${r.id}" title="เลื่อนรายการลง">▼</button>
+        <button class="mini alt" data-alt="${r.id}" title="แสดงแนวเดินสายทางเลือก">🔀</button>
         <button class="mini" data-del="${r.id}" title="ลบเส้นนี้">✖</button>
       </td>`;
     tb.appendChild(tr);
@@ -1139,6 +1280,8 @@ function renderTable() {
     btn.addEventListener('click', () => moveRoute(+btn.dataset.up, -1)));
   tb.querySelectorAll('button[data-down]').forEach(btn =>
     btn.addEventListener('click', () => moveRoute(+btn.dataset.down, 1)));
+  tb.querySelectorAll('button[data-alt]').forEach(btn =>
+    btn.addEventListener('click', () => showAlternatives(+btn.dataset.alt)));
 
   // คลิกแถว = เลือกเส้น + เลื่อนภาพไปยังเส้นนั้น · ลากที่ ⠿ = จัดลำดับ
   tb.querySelectorAll('tr').forEach(tr => {
@@ -1147,9 +1290,11 @@ function renderTable() {
       if (e.target.closest('select, button')) return;
       const r = state.routes.find(x => x.id === rid);
       if (!r) return;
+      if (state.altView && state.altView.routeId !== rid) state.altView = null;
       state.selected = { kind: 'route', id: rid };
       centerOnRoute(r);
       renderTable();
+      renderAltBox();
     });
     const handle = tr.querySelector('.drag-handle');
     handle.addEventListener('dragstart', e => {
