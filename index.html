@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CCTV Cabling Designer — ออกแบบระบบเดินสายกล้องวงจรปิด</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">
+      <span class="brand-icon">📹</span>
+      <div>
+        <h1>CCTV Cabling Designer</h1>
+        <p>ออกแบบระบบเครือข่ายกล้องวงจรปิดตามหลักวิศวกรรม · FTTx ONU → Distribution SW → PoE SW 8GE → CCTV</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button id="btnExportPng" class="btn" title="บันทึกภาพแบบแปลนพร้อมแนวเดินสายเป็น PNG">🖼️ Export PNG</button>
+      <button id="btnPrint" class="btn" title="พิมพ์รายงานการออกแบบ">🖨️ พิมพ์รายงาน</button>
+      <button id="btnClear" class="btn danger" title="ล้างการออกแบบทั้งหมด">🗑️ ล้างทั้งหมด</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="canvasSide">
+      <div id="toolbar">
+        <div class="tool-group">
+          <button class="tool" data-mode="select" title="เลือก/ย้ายจุด (Esc)">🖱️ เลือก</button>
+          <button class="tool" data-mode="calibrate" title="คลิก 2 จุดบนแถบสเกลของภาพ">📏 วัดสเกล</button>
+        </div>
+        <div class="tool-group">
+          <button class="tool" data-mode="place-onu" title="วางจุด FTTx ONU (ดาวแดง)">★ ONU</button>
+          <button class="tool" data-mode="place-dsw" title="วางจุด Distribution Switch">▣ Dist. SW</button>
+          <button class="tool" data-mode="place-psw" title="วางจุด PoE Switch 8GE">▣ PoE SW</button>
+          <button class="tool" data-mode="place-cam" title="วางจุดกล้อง CCTV (วงกลมเหลือง)">◉ กล้อง</button>
+        </div>
+        <div class="tool-group">
+          <button class="tool" data-mode="wall" title="วาดเส้นขอบอาคาร/แนวท่อ เพื่อใช้คำนวณแนวสายอัตโนมัติ (ดับเบิลคลิก/Esc = จบเส้น)">🏢 ขอบอาคาร</button>
+          <button class="tool" data-mode="route" title="ลากแนวสาย: คลิกอุปกรณ์ต้นทาง → คลิกจุดหักมุม → คลิกอุปกรณ์ปลายทาง">〰️ ลากแนวสาย</button>
+          <label class="chk" title="บังคับเส้นตั้งฉาก 90° ตามขอบอาคาร"><input type="checkbox" id="chkOrtho" checked> หักมุม 90°</label>
+        </div>
+        <div class="tool-group">
+          <button id="btnDeleteSel" class="tool" title="ลบรายการที่เลือก (Delete)">✖ ลบที่เลือก</button>
+          <button id="btnZoomFit" class="tool" title="ย่อ/ขยายให้พอดีจอ">⤢ พอดีจอ</button>
+        </div>
+        <span id="scaleBadge" class="badge warn">ยังไม่ได้ตั้งสเกล</span>
+      </div>
+
+      <div id="canvasWrap">
+        <canvas id="board"></canvas>
+        <div id="dropHint">
+          <div class="hint-card">
+            <p><strong>อัปโหลดภาพสถานที่ติดตั้ง</strong></p>
+            <p>ลากไฟล์ภาพมาวางที่นี่ หรือกดปุ่มด้านล่าง</p>
+            <button id="btnUpload2" class="btn primary">📂 เลือกไฟล์ภาพ</button>
+            <button id="btnSample2" class="btn">🗺️ ใช้ภาพตัวอย่าง (picture.jpg)</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="statusbar">
+        <span id="statusHint">เริ่มต้นด้วยการอัปโหลดภาพสถานที่ติดตั้ง</span>
+        <span id="statusRight"><span id="statusPos"></span> · ซูม <span id="statusZoom">100%</span></span>
+      </div>
+    </section>
+
+    <aside id="sidebar">
+      <details class="step" id="step1" open>
+        <summary><span class="stepno">1</span> อัปโหลดภาพสถานที่</summary>
+        <div class="step-body">
+          <p class="muted">ภาพถ่ายดาวเทียม/แบบแปลนที่มีแถบสเกลสำหรับอ้างอิงระยะ</p>
+          <div class="row">
+            <button id="btnUpload" class="btn primary">📂 เลือกไฟล์ภาพ</button>
+            <button id="btnSample" class="btn">🗺️ ภาพตัวอย่าง</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="step" id="step2" open>
+        <summary><span class="stepno">2</span> ตั้งค่ามาตราส่วน (Scale)</summary>
+        <div class="step-body">
+          <p class="muted">กด "วัดจากภาพ" แล้วคลิกจุดต้น–จุดปลายของแถบสเกลในภาพ จากนั้นกรอกระยะจริง</p>
+          <div class="row">
+            <button id="btnCalibrate" class="btn">📏 วัดจากภาพ (คลิก 2 จุด)</button>
+          </div>
+          <div class="row">
+            <label>ระยะจริง (เมตร)</label>
+            <input type="number" id="inpRealDist" value="100" min="0.1" step="any">
+            <button id="btnApplyScale" class="btn primary" disabled>ยืนยัน</button>
+          </div>
+          <p id="scaleInfo" class="muted">มาตราส่วน: —</p>
+        </div>
+      </details>
+
+      <details class="step" id="step3" open>
+        <summary><span class="stepno">3</span> วางจุดอุปกรณ์</summary>
+        <div class="step-body">
+          <p class="muted">คลิกปุ่มชนิดอุปกรณ์ แล้วคลิกตำแหน่งบนภาพตามสัญลักษณ์ (คลิกขวา/Esc เพื่อเลิกวาง)</p>
+          <div class="dev-grid">
+            <button class="devbtn" data-mode="place-onu"><span class="devicon star">★</span> FTTx ONU<small>ดาวแดง</small></button>
+            <button class="devbtn" data-mode="place-dsw"><span class="devicon dsw">D</span> Distribution SW<small>ตู้กระจายสัญญาณ</small></button>
+            <button class="devbtn" data-mode="place-psw"><span class="devicon psw">P</span> PoE Switch 8GE<small>จ่ายไฟกล้อง</small></button>
+            <button class="devbtn" data-mode="place-cam"><span class="devicon cam">C</span> กล้อง CCTV<small>วงกลมเหลือง</small></button>
+          </div>
+          <p id="devSummary" class="muted"></p>
+        </div>
+      </details>
+
+      <details class="step" id="step4" open>
+        <summary><span class="stepno">4</span> แนวเดินสาย</summary>
+        <div class="step-body">
+          <h3>ออกแบบอัตโนมัติ</h3>
+          <p class="muted">① วาดเส้นขอบอาคาร/แนวท่อบนภาพ ② ให้ระบบเลือกตำแหน่งสวิตช์ ③ คำนวณแนวสายตามขอบอาคาร (เส้นตรง หักมุมตามแนวที่วาด)</p>
+          <div class="row">
+            <button id="btnWall" class="btn">🏢 วาดขอบอาคาร</button>
+            <button id="btnAutoPlace" class="btn">🤖 วาง DSW/PSW อัตโนมัติ</button>
+          </div>
+          <div class="row">
+            <button id="btnAutoRoute" class="btn primary">⚡ คำนวณแนวสายอัตโนมัติ</button>
+          </div>
+          <h3>ลากเส้นเอง</h3>
+          <p class="muted">คลิกอุปกรณ์ต้นทาง → คลิกจุดหักมุมตามขอบอาคาร → คลิกอุปกรณ์ปลายทางเพื่อจบเส้น (คลิกขวา = ย้อนจุด, Esc = ยกเลิก)</p>
+          <div class="row">
+            <button id="btnRoute" class="btn">〰️ เริ่มลากแนวสาย</button>
+          </div>
+          <ul class="legend">
+            <li><span class="swatch cat6"></span> LAN CAT6 (≤ 180 ม.)</li>
+            <li><span class="swatch fiber"></span> Fiber Optic (&gt; 180 ม.)</li>
+            <li><span class="swatch wall"></span> ขอบอาคาร/แนวท่อ (เส้นอ้างอิง)</li>
+          </ul>
+          <p class="muted">ระบบเลือกชนิดสายอัตโนมัติจากระยะทาง และปรับเองได้ในตารางผลลัพธ์</p>
+        </div>
+      </details>
+
+      <details class="step" id="step5" open>
+        <summary><span class="stepno">5</span> ผลการออกแบบ</summary>
+        <div class="step-body">
+          <div id="warnBox"></div>
+          <h3>ตารางการเชื่อมต่อ</h3>
+          <div class="tbl-wrap">
+            <table id="tblRoutes">
+              <thead>
+                <tr><th>#</th><th>เส้นทาง</th><th>สาย</th><th>ระยะ<br>(ม.)</th><th>สั่งซื้อ<br>(ม.)</th><th>ท่อร้อยสาย</th><th></th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p id="tblNote" class="muted"></p>
+          <div id="altBox"></div>
+          <h3>ท่อร้อยสายและอุปกรณ์ประกอบ</h3>
+          <div id="conduitBox"></div>
+          <h3>สรุปอุปกรณ์ (Hikvision)</h3>
+          <div id="equipBox"></div>
+          <h3>ข้อแนะนำการติดตั้งตามมาตรฐานวิศวกรรม</h3>
+          <div id="recoBox"></div>
+        </div>
+      </details>
+    </aside>
+  </main>
+</div>
+
+<input type="file" id="fileInput" accept="image/*" hidden>
+<div id="report" aria-hidden="true"></div>
+<script src="app.js"></script>
+</body>
+</html>
