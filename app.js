@@ -848,16 +848,25 @@ function drawScene(g, proj, k, opts = {}) {
   if (conduitMode !== 'off') drawConduitOverlay(g, proj, k, conduitMode, opts.screen);
 
   // ---- routes ----
-  for (const r of state.routes) {
+  state.routes.forEach((r, ri) => {
     const cable = CABLES[effCable(r)];
     const sel = state.selected && state.selected.kind === 'route' && state.selected.id === r.id;
     strokePoly(g, r.points.map(proj), cable.color, sel ? 6 * k : 4 * k, k, sel);
-    // ป้ายระยะที่กึ่งกลางเส้น
+    // ป้ายระยะที่กึ่งกลางเส้น — โหมด "กรอบชี้เส้น" ใช้กรอบชี้แบบเดียวกับป้ายท่อ ไม่ทับบนเส้น
     const L = routeLenM(r);
     const mid = polyMidpoint(r.points);
     const txt = L != null ? `${r.name || ''}${L.toFixed(0)} ม.` : '— ม.';
-    pill(g, proj(mid), txt, cable.color, k);
-  }
+    if (conduitMode === 'callout') {
+      const a = proj(r.points[0]), b = proj(r.points[r.points.length - 1]);
+      const chord = dist(a, b);
+      const ux = chord ? (b.x - a.x) / chord : 1, uy = chord ? (b.y - a.y) / chord : 0;
+      const side = ri % 2 ? -1 : 1; // สลับฝั่ง (สวนทางกับ callout ของท่อ) ลดการซ้อนกัน
+      const pm = proj(mid);
+      conduitCallout(g, pm, { x: pm.x - uy * side * 34 * k, y: pm.y + ux * side * 34 * k }, [txt], cable.color, k);
+    } else {
+      pill(g, proj(mid), txt, cable.color, k);
+    }
+  });
 
   // ---- แนวเดินสายทางเลือก (เส้นประ ชั่วคราว) ----
   if (opts.screen && state.altView) {
