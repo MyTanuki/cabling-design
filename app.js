@@ -16,6 +16,7 @@ const wrap = $('#canvasWrap');
 /* ---------- engineering constants ---------- */
 const CAT6_MAX = 180;            // เมตร — เกินนี้ต้องใช้ Fiber
 const TIA_CH_MAX = 100;          // เมตร — channel limit ตาม TIA-568
+const BRANCH_MAX_M = 10;         // เมตร — จุดติดตั้งห่างแนวท่อไม่เกินนี้จึง branch จากแนวเดิมได้
 const SLACK_FACTOR = 1.10;       // เผื่อความยาวสาย 10%
 const SLACK_ENDS = 10;           // service loop ปลายทางรวม (ม.)
 
@@ -217,6 +218,7 @@ function makeRouter(devs) {
       const r = segIntersect(segs[i][0], segs[i][1], segs[j][0], segs[j][1]);
       if (r) { splits[i].push(r.t); splits[j].push(r.u); }
     }
+  const branchPx = (state.pxPerM ? BRANCH_MAX_M * state.pxPerM : 30) + 0.5; // +epsilon กันปัดเศษ
   // อุปกรณ์เชื่อมเข้าขอบอาคารได้หลายเส้น (สูงสุด 4 เส้นที่ระยะใกล้เคียงกับเส้นที่ใกล้สุด)
   const drops = [];
   devs.forEach(d => {
@@ -282,27 +284,27 @@ function makeRouter(devs) {
     return L;
   };
   const keysPts = keys => simplifyPts(keys.map(k => adj.get(k).p));
-  // ลิงก์สั้น (อุปกรณ์ตู้/บริเวณเดียวกัน ≤ ~20 ม.) ต่อตรงโดยไม่อ้อมขอบอาคาร
-  const shortPx = () => (state.pxPerM ? 20 * state.pxPerM : 40);
+  // ห้ามเดินนอกแนวอาคาร/แนวท่อ — ข้อยกเว้นเดียว: จุดสองจุดใกล้กันมาก (≤ BRANCH_MAX_M
+  // เช่น ONU→DSW ในตู้เดียวกัน) ต่อตรงแบบ patch ได้
   return {
+    // คืนจุดเส้นทาง หรือ null ถ้าต้องเดินนอกแนว (ผู้เรียกต้องข้ามการเชื่อมนี้)
     path(a, b) {
-      const man = manhattanPts(a, b);
-      const manLen = polyLenPx(man);
+      const direct = dist(a, b) <= branchPx ? [{ x: a.x, y: a.y }, { x: b.x, y: b.y }] : null;
       const ka = keyOf(a), kb = keyOf(b);
-      if (ka === kb || !adj.has(ka) || !adj.has(kb)) return man;
+      if (ka === kb || !adj.has(ka) || !adj.has(kb)) return direct;
       const keys = rawPath(ka, kb, null);
-      if (!keys) return man; // กราฟไม่ต่อถึงกัน
-      if (manLen <= shortPx() && manLen < keysLen(keys)) return man;
+      if (!keys) return direct; // กราฟไม่ต่อถึงกัน — ยอมให้เฉพาะระยะใกล้มาก
+      if (direct && polyLenPx(direct) < keysLen(keys)) return direct;
       return keysPts(keys);
     },
     dist(a, b) {
       const ka = keyOf(a), kb = keyOf(b);
       if (ka === kb) return 0;
-      const manLen = polyLenPx(manhattanPts(a, b));
-      if (!adj.has(ka) || !adj.has(kb)) return manLen * 1.2;
-      const { distM } = dijkstra(ka);
-      const g = distM.has(kb) ? distM.get(kb) : manLen * 1.5;
-      return (manLen <= shortPx() && manLen < g) ? manLen : g;
+      const euclid = dist(a, b);
+      const g = (adj.has(ka) && adj.has(kb))
+        ? (dijkstra(ka).distM.get(kb) ?? Infinity)
+        : Infinity;
+      return euclid <= branchPx ? Math.min(euclid, g) : g;
     },
     // แนวเดินสายทางเลือก: หาเส้นทางสำรองโดยกดน้ำหนักเส้นทางที่พบแล้ว (penalty method)
     alts(a, b, maxAlt = 3) {
@@ -311,12 +313,8 @@ function makeRouter(devs) {
       const push = pts => {
         if (pts && pts.length >= 2 && !out.some(o => samePath(o.points, pts))) out.push({ points: pts });
       };
-      if (ka === kb || !adj.has(ka) || !adj.has(kb)) {
-        push(manhattanPts(a, b));
-        if (Math.abs(a.x - b.x) > 1 && Math.abs(a.y - b.y) > 1)
-          push([{ x: a.x, y: a.y }, { x: a.x, y: b.y }, { x: b.x, y: b.y }]);
-        return out;
-      }
+      // มีแนวท่อแล้ว: จุดที่ต่อไม่ถึงแนว → ไม่เสนอเส้นนอกแนว
+      if (ka === kb || !adj.has(ka) || !adj.has(kb)) return out;
       const base = rawPath(ka, kb, null);
       if (!base) return out;
       push(keysPts(base));
@@ -397,7 +395,9 @@ function autoPlaceSwitches() {
     if (!state.pxPerM || k >= cams.length || attempt >= 4) break;
     const all = [...manualPsw.map(m => ({ x: m.x, y: m.y })), ...placed];
     const router = makeRouter([...all, ...cams.map(c => ({ x: c.x, y: c.y }))]);
-    const worst = Math.max(...cams.map(c => Math.min(...all.map(p => router.dist(c, p)))));
+    // กล้องที่อยู่นอกแนวท่อ (ระยะ Infinity) ไม่นำมาคิด — เพิ่มสวิตช์ช่วยอะไรไม่ได้
+    const reach = cams.map(c => Math.min(...all.map(p => router.dist(c, p)))).filter(isFinite);
+    const worst = reach.length ? Math.max(...reach) : 0;
     if (worst / state.pxPerM <= CAT6_MAX - 10) break;
     k++;
   }
@@ -501,11 +501,14 @@ function autoRouteAll() {
   const router = makeRouter([onu, dsw, ...psws, ...cams].filter(Boolean).map(d => ({ x: d.x, y: d.y })));
   const has = (a, b) => state.routes.some(r =>
     (r.fromId === a.id && r.toId === b.id) || (r.fromId === b.id && r.toId === a.id));
+  const skipped = [];
   const mk = (a, b) => {
     if (!a || !b || has(a, b)) return false;
+    const pts = router.path(a, b);
+    if (!pts) { skipped.push(`${a.label}→${b.label}`); return false; } // ห้ามลากนอกแนว
     state.routes.push({
       id: state.nextId++, fromId: a.id, toId: b.id,
-      points: router.path(a, b), override: 'auto', env: 'outdoor', auto: true,
+      points: pts, override: 'auto', env: 'outdoor', auto: true,
     });
     return true;
   };
@@ -524,16 +527,25 @@ function autoRouteAll() {
   });
   // จ่ายกล้องเข้าสวิตช์ที่ใกล้สุด (ตามระยะจริงบนกราฟ) โดยไม่เกิน 8 พอร์ต
   const todo = cams.filter(c => !linkedCams.has(c.id))
-    .map(c => ({ c, ds: psws.map(p => ({ p, d: router.dist(c, p) })).sort((x, y) => x.d - y.d) }))
-    .sort((x, y) => x.ds[0].d - y.ds[0].d);
+    .map(c => ({
+      c,
+      ds: psws.map(p => ({ p, d: router.dist(c, p) }))
+        .filter(x => isFinite(x.d))            // ตัดปลายทางที่ต่อถึงกันตามแนวไม่ได้
+        .sort((x, y) => x.d - y.d),
+    }))
+    .sort((x, y) => (x.ds.length ? x.ds[0].d : Infinity) - (y.ds.length ? y.ds[0].d : Infinity));
   for (const t of todo) {
+    if (!t.ds.length) { skipped.push(`${t.c.label} (ห่างแนวเกิน ${BRANCH_MAX_M} ม.)`); continue; }
     const pick = t.ds.find(x => (load.get(x.p.id) || 0) < 8) || t.ds[0];
     load.set(pick.p.id, (load.get(pick.p.id) || 0) + 1);
     n += mk(pick.p, t.c) ? 1 : 0;
   }
   refresh();
+  const skipMsg = skipped.length
+    ? ` · ข้าม ${skipped.length} จุดที่อยู่นอกแนว (${skipped.slice(0, 3).join(', ')}${skipped.length > 3 ? ', …' : ''}) — วาดแนวท่อไปให้ถึง หรือย้ายจุดเข้าใกล้แนว`
+    : '';
   $('#statusHint').textContent = state.walls.length
-    ? `คำนวณแนวสายตามขอบอาคารแล้ว ${n} เส้น — ปรับสภาพแวดล้อม/ชนิดสายได้ในตาราง`
+    ? `คำนวณแนวสายตามแนวอาคาร/ท่อแล้ว ${n} เส้น${skipMsg}`
     : `คำนวณแนวสายแล้ว ${n} เส้น (แนวเส้นตรงหักมุมฉาก — วาด "ขอบอาคาร" ก่อนเพื่อให้เส้นเลาะตามแนวอาคาร)`;
 }
 
@@ -1463,6 +1475,30 @@ function renderWarnings() {
   const warns = [];
   if (state.img && !state.pxPerM)
     warns.push('ยังไม่ได้ตั้งมาตราส่วน — ระยะทางในตารางจะยังคำนวณไม่ได้ (ขั้นตอนที่ 2)');
+  // กติกาเดินสายตามแนวเท่านั้น: อุปกรณ์ห่างแนวเกินระยะ branch + เส้นที่มีช่วงออกนอกแนว
+  if (state.walls.length && state.pxPerM) {
+    const segs = wallSegs();
+    const branchPx = BRANCH_MAX_M * state.pxPerM + 0.5; // +epsilon เท่ากับ makeRouter
+    const distToWalls = p => segs.reduce((m, s) => Math.min(m, projToSeg(p, s[0], s[1]).d), Infinity);
+    const far = state.devices.filter(d => distToWalls(d) > branchPx);
+    if (far.length)
+      warns.push(`อุปกรณ์อยู่ห่างแนวอาคาร/ท่อเกิน ${BRANCH_MAX_M} ม. (ลากสายอัตโนมัติไม่ได้): ${far.map(d => d.label).join(', ')} — วาดแนวท่อไปให้ถึง`);
+    const tol = 3; // px — เผื่อความคลาดเคลื่อนของการลากมือ
+    for (const r of state.routes) {
+      if (polyLenPx(r.points) <= branchPx && r.points.length === 2) continue; // patch สั้นในตู้เดียวกัน
+      let off = 0;
+      for (let i = 1; i < r.points.length; i++) {
+        const a = r.points[i - 1], b = r.points[i];
+        const aOK = distToWalls(a) <= tol, bOK = distToWalls(b) <= tol;
+        if (aOK && bOK) continue;
+        // ช่วง branch เข้าอุปกรณ์: ปลายด้านอุปกรณ์อยู่ใกล้แนว (≤ ระยะ branch) อีกด้านอยู่บนแนว
+        if (i === 1 && bOK && distToWalls(a) <= branchPx) continue;
+        if (i === r.points.length - 1 && aOK && distToWalls(b) <= branchPx) continue;
+        off++;
+      }
+      if (off) warns.push(`${routeLabel(r)}: มีช่วงเดินนอกแนวอาคาร/ท่อ ${off} ช่วง — ปรับแนวหรือวาดแนวท่อเพิ่ม`);
+    }
+  }
   // ตรวจพอร์ต PoE Switch เกิน 8
   for (const psw of state.devices.filter(d => d.type === 'psw')) {
     const cams = state.routes.filter(r => {
