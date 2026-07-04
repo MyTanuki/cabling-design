@@ -63,12 +63,15 @@ const state = {
   draft: null,               // {fromId, points:[]}
   wallDraft: null,           // {points:[]}
   altView: null,             // {routeId, options:[{points}]} — แนวเดินสายทางเลือก (ชั่วคราว)
+  conduitLabelOffsets: {},   // key ช่วงท่อ → {x,y} offset โลก ของป้ายที่ผู้ใช้ลากย้าย
   selected: null,            // {kind:'device'|'route', id}
   hoverW: null,              // world coords of pointer
   nextId: 1,
 };
 
 let panning = false, dragDev = null, downScr = null, moved = false;
+let dragLabel = null;        // {key, midW, gdx, gdy} — กำลังลากป้ายท่อ
+let conduitLabelHits = [];   // กรอบป้ายท่อบนจอจากการวาดรอบล่าสุด (สำหรับ hit-test)
 
 /* ============================================================
    coordinate helpers
@@ -809,8 +812,9 @@ function drawScene(g, proj, k, opts = {}) {
   }
 
   // ---- ท่อร้อยสายจริง (casing สี+จำนวนสายทับกัน) — เลือกรูปแบบที่ #selConduit ----
+  if (opts.screen) conduitLabelHits = [];
   const conduitMode = $('#selConduit').value;
-  if (conduitMode !== 'off') drawConduitOverlay(g, proj, k, conduitMode);
+  if (conduitMode !== 'off') drawConduitOverlay(g, proj, k, conduitMode, opts.screen);
 
   // ---- routes ----
   for (const r of state.routes) {
@@ -904,6 +908,7 @@ function pill(g, p, text, color, k) {
   g.strokeStyle = color; g.lineWidth = 1 * k; roundRect(g, x, y, w, h, 8 * k); g.stroke();
   g.fillStyle = color; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText(text, p.x, p.y + 0.5 * k);
+  return { x, y, w, h };
 }
 
 function roundRect(g, x, y, w, h, r) {
@@ -947,9 +952,13 @@ function drawWall(g, pts, k, sel, color, dangle) {
 
 const CONDUIT_COLORS = ['#94a3b8', '#60a5fa', '#34d399', '#fbbf24', '#f97316'];
 
-function drawConduitOverlay(g, proj, k, mode) {
+function drawConduitOverlay(g, proj, k, mode, screen) {
   conduitAnalysis().forEach((run, idx) => {
     const a = proj(run.p0), b = proj(run.p1);
+    // จุดกึ่งกลางช่วงในพิกัดโลก — ใช้เป็นคีย์ประจำช่วงและจุดอ้างอิง offset ป้ายที่ผู้ใช้ลากย้าย
+    const midW = { x: (run.p0.x + run.p1.x) / 2, y: (run.p0.y + run.p1.y) / 2 };
+    const key = run.routeIds.join(',') + '|' + Math.round(midW.x) + ',' + Math.round(midW.y);
+    const off = state.conduitLabelOffsets[key];
     const color = CONDUIT_COLORS[Math.min(run.sizeIdx, CONDUIT_COLORS.length - 1)];
     g.save();
     g.lineCap = 'butt'; g.globalAlpha = 0.55;
@@ -979,27 +988,34 @@ function drawConduitOverlay(g, proj, k, mode) {
       byCable[nm] = (byCable[nm] || 0) + 1;
     });
     const cableLine = Object.entries(byCable).map(([nm, n]) => `${nm} ×${n}`).join(' + ') || `${run.count} สาย`;
+    let rect;
     if (mode === 'callout') {
       // กรอบชี้เส้นแบบแบบแปลนวิศวกรรม: ยกกรอบออกด้านข้างแนวท่อ สลับฝั่งกันไม่ให้ซ้อน
+      // ถ้าผู้ใช้เคยลากย้ายป้ายช่วงนี้ ใช้ตำแหน่งที่ลากไว้ (offset โลก) แทนตำแหน่งอัตโนมัติ
       const ux = len ? (b.x - a.x) / len : 1, uy = len ? (b.y - a.y) / len : 0;
       const side = idx % 2 ? 1 : -1;
-      const dir = { x: -uy * side, y: ux * side };
-      conduitCallout(g, mid, dir, [
+      const center = off
+        ? proj({ x: midW.x + off.x, y: midW.y + off.y })
+        : { x: mid.x - uy * side * 52 * k, y: mid.y + ux * side * 52 * k };
+      rect = conduitCallout(g, mid, center, [
         `${ENVS[run.env].short} ${run.size}`,
         cableLine,
         `ยาว ${Lm.toFixed(0)} ม.`,
       ], color, k);
     } else {
       // ป้ายบนเส้น: ชนิด ขนาด จำนวนสายแยกชนิด ความยาว — เลื่อนลงเล็กน้อยไม่ให้ทับป้ายระยะของเส้นสาย
-      pill(g, { x: mid.x, y: mid.y + 18 * k },
+      const pos = off
+        ? proj({ x: midW.x + off.x, y: midW.y + off.y })
+        : { x: mid.x, y: mid.y + 18 * k };
+      rect = pill(g, pos,
         `${ENVS[run.env].short} ${run.size.replace(' ×หลายท่อ', '')} · ${cableLine} · ${Lm.toFixed(0)} ม.`, color, k * 0.9);
     }
+    if (screen && rect) conduitLabelHits.push({ ...rect, key, midW });
   });
 }
 
-function conduitCallout(g, anchor, dir, lines, color, k) {
-  const off = 52 * k;
-  const cx = anchor.x + dir.x * off, cy = anchor.y + dir.y * off;
+function conduitCallout(g, anchor, center, lines, color, k) {
+  const cx = center.x, cy = center.y;
   g.font = `${11 * k}px "Segoe UI", "Leelawadee UI", sans-serif`;
   const w = Math.max(...lines.map(t => g.measureText(t).width)) + 14 * k;
   const lh = 14.5 * k, h = lines.length * lh + 8 * k;
@@ -1014,6 +1030,7 @@ function conduitCallout(g, anchor, dir, lines, color, k) {
   g.strokeStyle = color; g.lineWidth = 1.2 * k; roundRect(g, x, y, w, h, 4 * k); g.stroke();
   g.fillStyle = '#e2e8f0'; g.textAlign = 'center'; g.textBaseline = 'middle';
   lines.forEach((t, i) => g.fillText(t, cx, y + 4 * k + lh * (i + 0.5)));
+  return { x, y, w, h };
 }
 
 function crossMark(g, p, k) {
@@ -1138,6 +1155,13 @@ function distToSeg(p, a, b) {
   t = Math.max(0, Math.min(1, t));
   return dist(p, { x: a.x + t * dx, y: a.y + t * dy });
 }
+function hitConduitLabel(scr) {
+  for (let i = conduitLabelHits.length - 1; i >= 0; i--) {
+    const h = conduitLabelHits[i];
+    if (scr.x >= h.x && scr.x <= h.x + h.w && scr.y >= h.y && scr.y <= h.y + h.h) return h;
+  }
+  return null;
+}
 
 /* ============================================================
    interactions
@@ -1160,7 +1184,7 @@ function setMode(m) {
 }
 
 const HINTS = {
-  select: 'คลิกเพื่อเลือกจุด/เส้น · ลากจุดเพื่อย้าย · ลากพื้นที่ว่างเพื่อเลื่อนภาพ · ล้อเมาส์เพื่อซูม',
+  select: 'คลิกเพื่อเลือกจุด/เส้น · ลากจุดเพื่อย้าย · ลากป้ายท่อเพื่อจัดตำแหน่งป้าย · ลากพื้นที่ว่างเพื่อเลื่อนภาพ · ล้อเมาส์เพื่อซูม',
   calibrate: 'คลิกจุดที่ 1 และจุดที่ 2 บนแถบสเกลของภาพ แล้วกรอกระยะจริงในขั้นตอนที่ 2',
   'place-onu': 'คลิกตำแหน่งติดตั้ง FTTx ONU (ดาวแดง) · คลิกขวา/Esc เพื่อเลิกวาง',
   'place-dsw': 'คลิกตำแหน่งติดตั้ง Distribution Switch · คลิกขวา/Esc เพื่อเลิกวาง',
@@ -1183,6 +1207,13 @@ canvas.addEventListener('mousedown', e => {
   if (!state.img) return;
   const scr = mousePos(e);
   downScr = scr; moved = false;
+  if (e.button === 0 && state.mode === 'select' && !hitDevice(scr)) {
+    const lb = hitConduitLabel(scr);
+    if (lb) { // จับป้ายท่อเพื่อลากย้าย — จำระยะจากจุดจับถึงกึ่งกลางป้าย กันป้ายกระโดด
+      dragLabel = { key: lb.key, midW: lb.midW, gdx: lb.x + lb.w / 2 - scr.x, gdy: lb.y + lb.h / 2 - scr.y };
+      return;
+    }
+  }
   if (e.button === 1 || (e.button === 0 && state.mode === 'select' && !hitDevice(scr) && !hitRoute(scr) && !hitWall(scr))) {
     panning = true;
     e.preventDefault();
@@ -1207,6 +1238,9 @@ canvas.addEventListener('mousemove', e => {
       if (r.fromId === dragDev.id) r.points[0] = { x: w.x, y: w.y };
       if (r.toId === dragDev.id) r.points[r.points.length - 1] = { x: w.x, y: w.y };
     }
+  } else if (dragLabel && moved) {
+    const c = s2w({ x: scr.x + dragLabel.gdx, y: scr.y + dragLabel.gdy });
+    state.conduitLabelOffsets[dragLabel.key] = { x: c.x - dragLabel.midW.x, y: c.y - dragLabel.midW.y };
   }
   const wpt = state.hoverW;
   $('#statusPos').textContent = state.pxPerM && state.img
@@ -1218,8 +1252,8 @@ canvas.addEventListener('mousemove', e => {
 canvas.addEventListener('mouseup', e => {
   const scr = mousePos(e);
   const wasClick = !moved;
-  const wasDrag = (dragDev && moved);
-  panning = false; dragDev = null; downScr = null;
+  const wasDrag = (dragDev && moved) || (dragLabel && moved);
+  panning = false; dragDev = null; dragLabel = null; downScr = null;
   if (wasDrag) { refresh(); return; }
   if (!wasClick || e.button !== 0 || !state.img) return;
   handleClick(scr);
@@ -1449,7 +1483,7 @@ $('#btnClear').addEventListener('click', () => {
   Object.assign(state, {
     devices: [], routes: [], walls: [],
     cal: { p1: null, p2: null }, pxPerM: null, draft: null, wallDraft: null,
-    selected: null, nextId: 1,
+    selected: null, nextId: 1, conduitLabelOffsets: {},
   });
   localStorage.removeItem(LS_KEY);
   refresh();
@@ -1891,6 +1925,7 @@ function saveLocal() {
     const data = {
       devices: state.devices, routes: state.routes, walls: state.walls,
       pxPerM: state.pxPerM, cal: state.cal, nextId: state.nextId,
+      conduitLabelOffsets: state.conduitLabelOffsets,
       imgSrcKind: state.imgSrcKind,
       imgDataUrl: (state.imgSrcKind === 'file' && state.imgDataUrl && state.imgDataUrl.length < 3.5e6)
         ? state.imgDataUrl : null,
@@ -1907,6 +1942,7 @@ function loadLocal() {
       devices: d.devices || [], routes: d.routes || [], walls: d.walls || [],
       pxPerM: d.pxPerM || null, cal: d.cal || { p1: null, p2: null },
       nextId: d.nextId || 1,
+      conduitLabelOffsets: d.conduitLabelOffsets || {},
     });
     if (d.imgSrcKind === 'sample') loadImage('picture.jpg', 'sample');
     else if (d.imgDataUrl) loadImage(d.imgDataUrl, 'file');
