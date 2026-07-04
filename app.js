@@ -147,7 +147,9 @@ const CONDUIT_MERGE_TOL_M = 0.3; // เมตร — ระยะตั้งฉ
 
 function conduitAnalysis() {
   if (!state.pxPerM) return [];
-  const dTol = CONDUIT_MERGE_TOL_M * state.pxPerM; // แปลงเป็นพิกเซลโลกตามมาตราส่วนจริง
+  // แปลงเป็นพิกเซลโลกตามมาตราส่วนจริง แต่ไม่ต่ำกว่า 4px — ที่สเกลหยาบ (ภาพดาวเทียม px/ม. ต่ำ)
+  // ความคลาดเคลื่อนจากการวาดมือ/การลดจุด (simplifyPts ~0.75px) ใหญ่กว่า 0.3 ม. เสียอีก
+  const dTol = Math.max(CONDUIT_MERGE_TOL_M * state.pxPerM, 4);
   const segList = [];
   for (const r of state.routes) {
     if (routeLenM(r) == null) continue;
@@ -159,21 +161,23 @@ function conduitAnalysis() {
       segList.push({ a, b, od: cable.od, env, routeId: r.id });
     }
   }
-  // จัดกลุ่มช่วงที่อยู่บนเส้นตรงเดียวกันจริง (ปลายทั้งสองของกันและกันห่างแนวไม่เกิน dTol)
-  // และสภาพแวดล้อมเดียวกัน — จับคู่เชิงเรขาคณิตแทนการปัดค่าเป็น bucket เพราะช่วงที่มุม/ระยะ
-  // ก้ำกึ่งขอบ bucket จะถูกแยกกลุ่มทั้งที่ร้อยท่อเดียวกัน ทำให้ป้ายแสดงซ้ำซ้อนหลายรายการ
-  const perpDist = (p, s) => {
-    const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y;
-    return Math.abs((p.x - s.a.x) * dy - (p.y - s.a.y) * dx) / (Math.hypot(dx, dy) || 1);
+  // จัดกลุ่มช่วงที่ "เดินแนวเดียวกัน" — ต้อง (1) ทิศเกือบขนานกัน (ต่างไม่เกิน ~10° กันจับคู่กับ
+  // branch ที่หักฉาก) และ (2) มีปลายข้างหนึ่งห่างอีกช่วงไม่เกิน dTol แบบ clamp ปลาย (distToSeg)
+  // — ใช้ distToSeg แทนระยะถึงเส้นตรงอนันต์ เพราะช่วงยาวที่เอียงต่างกันนิดเดียว (วาดมือ/ลดจุด)
+  // จะมีปลายไกลเบี่ยงเกินเกณฑ์ทั้งที่ซ้อนทับกันจริง ทำให้สายเส้นทางเดียวกันไม่รวมท่อ
+  const segAng = s => Math.atan2(s.b.y - s.a.y, s.b.x - s.a.x);
+  const sameConduit = (s1, s2) => {
+    let dAng = Math.abs(segAng(s1) - segAng(s2)) % Math.PI;
+    dAng = Math.min(dAng, Math.PI - dAng);
+    if (dAng > 0.17) return false;
+    return distToSeg(s2.a, s1.a, s1.b) < dTol || distToSeg(s2.b, s1.a, s1.b) < dTol ||
+           distToSeg(s1.a, s2.a, s2.b) < dTol || distToSeg(s1.b, s2.a, s2.b) < dTol;
   };
-  const sameLine = (s1, s2) =>
-    perpDist(s2.a, s1) < dTol && perpDist(s2.b, s1) < dTol &&
-    perpDist(s1.a, s2) < dTol && perpDist(s1.b, s2) < dTol;
   const parent = segList.map((_, i) => i);
   const find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
   for (let i = 0; i < segList.length; i++)
     for (let j = i + 1; j < segList.length; j++) {
-      if (segList[i].env !== segList[j].env || !sameLine(segList[i], segList[j])) continue;
+      if (segList[i].env !== segList[j].env || !sameConduit(segList[i], segList[j])) continue;
       const a = find(i), b = find(j);
       if (a !== b) parent[a] = b;
     }
@@ -199,7 +203,7 @@ function conduitAnalysis() {
     const micro = [];
     for (let i = 1; i < bounds.length; i++) {
       const t0 = bounds[i - 1], t1 = bounds[i];
-      if (t1 - t0 < 0.5) continue;
+      if (t1 - t0 < dTol) continue; // เศษช่วงสั้นระดับรอยต่อ/จุดแยก — เป็น noise ไม่ใช่ท่อจริง
       const mid = (t0 + t1) / 2;
       const covering = segs.filter(s => s.t0 <= mid + 1e-6 && s.t1 >= mid - 1e-6);
       if (!covering.length) continue;
@@ -211,13 +215,40 @@ function conduitAnalysis() {
     for (let i = 0; i < micro.length; i++) {
       let j = i;
       const setKey = micro[i].routeIds.join(',');
-      while (j + 1 < micro.length && micro[j + 1].routeIds.join(',') === setKey && micro[j + 1].t0 - micro[j].t1 < 1) j++;
+      while (j + 1 < micro.length && micro[j + 1].routeIds.join(',') === setKey && micro[j + 1].t0 - micro[j].t1 < 2 * dTol) j++;
       const m0 = micro[i], m1 = micro[j];
       const p0 = { x: d * nx + m0.t0 * ux, y: d * ny + m0.t0 * uy };
       const p1 = { x: d * nx + m1.t1 * ux, y: d * ny + m1.t1 * uy };
       const size = conduitSizeForOds(m0.ods);
       runs.push({ env: m0.env, p0, p1, lenPx: m1.t1 - m0.t0, count: m0.routeIds.length, sizeIdx: size.idx, size: size.label, routeIds: m0.routeIds });
       i = j;
+    }
+  }
+  // รวม run ที่ชุดสายเหมือนกันและปลายต่อเนื่องกัน (ท่อเส้นเดียวเดินต่อผ่านจุดหักมุม/โค้ง)
+  // เป็นเส้นทาง polyline เดียว — ไม่งั้นแนวที่เลี้ยวจะถูกแสดงเป็นหลายป้ายทั้งที่เป็นท่อเดียวกัน
+  runs.forEach(r => { r.pts = [r.p0, r.p1]; });
+  const joinKey = r => r.env + '|' + r.routeIds.join(',');
+  let joined = true;
+  while (joined) {
+    joined = false;
+    outer:
+    for (let i = 0; i < runs.length; i++) {
+      for (let j = 0; j < runs.length; j++) {
+        if (i === j || joinKey(runs[i]) !== joinKey(runs[j])) continue;
+        const A = runs[i].pts, B = runs[j].pts;
+        let merged = null;
+        if (dist(A[A.length - 1], B[0]) < dTol) merged = A.concat(B.slice(1));
+        else if (dist(A[A.length - 1], B[B.length - 1]) < dTol) merged = A.concat(B.slice(0, -1).reverse());
+        else if (dist(A[0], B[B.length - 1]) < dTol) merged = B.concat(A.slice(1));
+        else if (dist(A[0], B[0]) < dTol) merged = B.slice(1).reverse().concat(A);
+        if (merged) {
+          runs[i].pts = merged;
+          runs[i].lenPx += runs[j].lenPx;
+          runs.splice(j, 1);
+          joined = true;
+          break outer;
+        }
+      }
     }
   }
   return runs;
@@ -954,31 +985,41 @@ const CONDUIT_COLORS = ['#94a3b8', '#60a5fa', '#34d399', '#fbbf24', '#f97316'];
 
 function drawConduitOverlay(g, proj, k, mode, screen) {
   conduitAnalysis().forEach((run, idx) => {
-    const a = proj(run.p0), b = proj(run.p1);
-    // จุดกึ่งกลางช่วงในพิกัดโลก — ใช้เป็นคีย์ประจำช่วงและจุดอ้างอิง offset ป้ายที่ผู้ใช้ลากย้าย
-    const midW = { x: (run.p0.x + run.p1.x) / 2, y: (run.p0.y + run.p1.y) / 2 };
+    const P = run.pts.map(proj);
+    // จุดกึ่งกลางเส้นทางในพิกัดโลก — ใช้เป็นคีย์ประจำช่วงและจุดอ้างอิง offset ป้ายที่ผู้ใช้ลากย้าย
+    const midW = polyMidpoint(run.pts);
     const key = run.routeIds.join(',') + '|' + Math.round(midW.x) + ',' + Math.round(midW.y);
     const off = state.conduitLabelOffsets[key];
     const color = CONDUIT_COLORS[Math.min(run.sizeIdx, CONDUIT_COLORS.length - 1)];
     g.save();
-    g.lineCap = 'butt'; g.globalAlpha = 0.55;
+    g.lineCap = 'butt'; g.lineJoin = 'round'; g.globalAlpha = 0.55;
     g.strokeStyle = color; g.lineWidth = 8 * k;
-    g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
+    g.beginPath(); P.forEach((p, i) => i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y)); g.stroke();
     g.globalAlpha = 1;
-    // ขีดจำนวนสายที่ทับกันในท่อนี้
-    const len = dist(a, b);
+    // ขีดจำนวนสายที่ทับกันในท่อนี้ — กระจายตามความยาวเส้นทาง
+    const len = polyLenPx(P);
     if (len > 4) {
-      const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len, nx = -uy, ny = ux;
       for (let c = 1; c <= run.count; c++) {
-        const t = len * c / (run.count + 1);
-        const px = a.x + ux * t, py = a.y + uy * t;
-        g.strokeStyle = 'rgba(15,23,42,.9)'; g.lineWidth = 1.5 * k;
-        g.beginPath(); g.moveTo(px - nx * 4 * k, py - ny * 4 * k); g.lineTo(px + nx * 4 * k, py + ny * 4 * k); g.stroke();
+        let target = len * c / (run.count + 1), acc = 0;
+        for (let i2 = 1; i2 < P.length; i2++) {
+          const segL = dist(P[i2 - 1], P[i2]);
+          if (acc + segL >= target && segL > 0) {
+            const t = (target - acc) / segL;
+            const px = P[i2 - 1].x + (P[i2].x - P[i2 - 1].x) * t;
+            const py = P[i2 - 1].y + (P[i2].y - P[i2 - 1].y) * t;
+            const ux = (P[i2].x - P[i2 - 1].x) / segL, uy = (P[i2].y - P[i2 - 1].y) / segL;
+            g.strokeStyle = 'rgba(15,23,42,.9)'; g.lineWidth = 1.5 * k;
+            g.beginPath(); g.moveTo(px + uy * 4 * k, py - ux * 4 * k); g.lineTo(px - uy * 4 * k, py + ux * 4 * k); g.stroke();
+            break;
+          }
+          acc += segL;
+        }
       }
     }
     g.restore();
     const Lm = run.lenPx / state.pxPerM;
-    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const a = P[0], b = P[P.length - 1];
+    const mid = proj(midW);
     // จำนวนสายแยกตามชนิด เช่น "CAT6 ×2 + Fiber ×1"
     const byCable = {};
     run.routeIds.forEach(id => {
@@ -992,7 +1033,8 @@ function drawConduitOverlay(g, proj, k, mode, screen) {
     if (mode === 'callout') {
       // กรอบชี้เส้นแบบแบบแปลนวิศวกรรม: ยกกรอบออกด้านข้างแนวท่อ สลับฝั่งกันไม่ให้ซ้อน
       // ถ้าผู้ใช้เคยลากย้ายป้ายช่วงนี้ ใช้ตำแหน่งที่ลากไว้ (offset โลก) แทนตำแหน่งอัตโนมัติ
-      const ux = len ? (b.x - a.x) / len : 1, uy = len ? (b.y - a.y) / len : 0;
+      const chord = dist(a, b);
+      const ux = chord ? (b.x - a.x) / chord : 1, uy = chord ? (b.y - a.y) / chord : 0;
       const side = idx % 2 ? 1 : -1;
       const center = off
         ? proj({ x: midW.x + off.x, y: midW.y + off.y })
