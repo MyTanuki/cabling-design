@@ -949,8 +949,10 @@ function drawConduitOverlay(g, proj, k) {
       }
     }
     g.restore();
-    pill(g, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
-      `${run.size.replace(' ×หลายท่อ', '')} ×${run.count}`, color, k * 0.9);
+    // ป้ายรายละเอียดท่อ: ชนิด ขนาด จำนวนสาย ความยาว — เลื่อนลงเล็กน้อยไม่ให้ทับป้ายระยะของเส้นสาย
+    const Lm = run.lenPx / state.pxPerM;
+    pill(g, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 + 18 * k },
+      `${ENVS[run.env].short} ${run.size.replace(' ×หลายท่อ', '')} · ${run.count} สาย · ${Lm.toFixed(0)} ม.`, color, k * 0.9);
   }
 }
 
