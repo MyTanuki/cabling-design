@@ -42,7 +42,13 @@
           <label class="chk" title="บังคับเส้นตั้งฉาก 90° ตามขอบอาคาร"><input type="checkbox" id="chkOrtho" checked> หักมุม 90°</label>
         </div>
         <div class="tool-group">
-          <label class="chk" title="แสดงท่อร้อยสายจริง (สี+จำนวนสายที่ทับกัน) บนแบบแปลน"><input type="checkbox" id="chkConduit"> แสดงท่อร้อยสาย</label>
+          <label class="chk" title="รูปแบบการแสดงท่อร้อยสายจริง (สี ขนาด จำนวนสาย) บนแบบแปลน">ท่อร้อยสาย:
+            <select id="selConduit">
+              <option value="off" selected>ไม่แสดง</option>
+              <option value="inline">ป้ายบนเส้น</option>
+              <option value="callout">กรอบชี้เส้น</option>
+            </select>
+          </label>
         </div>
         <div class="tool-group">
           <button id="btnDeleteSel" class="tool" title="ลบรายการที่เลือก (Delete)">✖ ลบที่เลือก</button>

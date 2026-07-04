@@ -195,7 +195,7 @@ function conduitAnalysis() {
       const p0 = { x: s0.d * s0.nx + m0.t0 * s0.ux, y: s0.d * s0.ny + m0.t0 * s0.uy };
       const p1 = { x: s0.d * s0.nx + m1.t1 * s0.ux, y: s0.d * s0.ny + m1.t1 * s0.uy };
       const size = conduitSizeForOds(m0.ods);
-      runs.push({ env: m0.env, p0, p1, lenPx: m1.t1 - m0.t0, count: m0.routeIds.length, sizeIdx: size.idx, size: size.label });
+      runs.push({ env: m0.env, p0, p1, lenPx: m1.t1 - m0.t0, count: m0.routeIds.length, sizeIdx: size.idx, size: size.label, routeIds: m0.routeIds });
       i = j;
     }
   }
@@ -790,8 +790,9 @@ function drawScene(g, proj, k, opts = {}) {
     }
   }
 
-  // ---- ท่อร้อยสายจริง (casing สี+จำนวนสายทับกัน) — toggle #chkConduit ----
-  if ($('#chkConduit').checked) drawConduitOverlay(g, proj, k);
+  // ---- ท่อร้อยสายจริง (casing สี+จำนวนสายทับกัน) — เลือกรูปแบบที่ #selConduit ----
+  const conduitMode = $('#selConduit').value;
+  if (conduitMode !== 'off') drawConduitOverlay(g, proj, k, conduitMode);
 
   // ---- routes ----
   for (const r of state.routes) {
@@ -928,8 +929,8 @@ function drawWall(g, pts, k, sel, color, dangle) {
 
 const CONDUIT_COLORS = ['#94a3b8', '#60a5fa', '#34d399', '#fbbf24', '#f97316'];
 
-function drawConduitOverlay(g, proj, k) {
-  for (const run of conduitAnalysis()) {
+function drawConduitOverlay(g, proj, k, mode) {
+  conduitAnalysis().forEach((run, idx) => {
     const a = proj(run.p0), b = proj(run.p1);
     const color = CONDUIT_COLORS[Math.min(run.sizeIdx, CONDUIT_COLORS.length - 1)];
     g.save();
@@ -949,11 +950,52 @@ function drawConduitOverlay(g, proj, k) {
       }
     }
     g.restore();
-    // ป้ายรายละเอียดท่อ: ชนิด ขนาด จำนวนสาย ความยาว — เลื่อนลงเล็กน้อยไม่ให้ทับป้ายระยะของเส้นสาย
     const Lm = run.lenPx / state.pxPerM;
-    pill(g, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 + 18 * k },
-      `${ENVS[run.env].short} ${run.size.replace(' ×หลายท่อ', '')} · ${run.count} สาย · ${Lm.toFixed(0)} ม.`, color, k * 0.9);
-  }
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (mode === 'callout') {
+      // กรอบชี้เส้นแบบแบบแปลนวิศวกรรม: ยกกรอบออกด้านข้างแนวท่อ สลับฝั่งกันไม่ให้ซ้อน
+      const ux = len ? (b.x - a.x) / len : 1, uy = len ? (b.y - a.y) / len : 0;
+      const side = idx % 2 ? 1 : -1;
+      const dir = { x: -uy * side, y: ux * side };
+      // จำนวนสายแยกตามชนิด เช่น "CAT6 ×2 + Fiber ×1"
+      const byCable = {};
+      run.routeIds.forEach(id => {
+        const r = state.routes.find(x => x.id === id);
+        if (!r) return;
+        const nm = effCable(r) === 'cat6' ? 'CAT6' : 'Fiber';
+        byCable[nm] = (byCable[nm] || 0) + 1;
+      });
+      const cableLine = Object.entries(byCable).map(([nm, n]) => `${nm} ×${n}`).join(' + ') || `${run.count} สาย`;
+      conduitCallout(g, mid, dir, [
+        `${ENVS[run.env].short} ${run.size}`,
+        cableLine,
+        `ยาว ${Lm.toFixed(0)} ม.`,
+      ], color, k);
+    } else {
+      // ป้ายบนเส้น: ชนิด ขนาด จำนวนสาย ความยาว — เลื่อนลงเล็กน้อยไม่ให้ทับป้ายระยะของเส้นสาย
+      pill(g, { x: mid.x, y: mid.y + 18 * k },
+        `${ENVS[run.env].short} ${run.size.replace(' ×หลายท่อ', '')} · ${run.count} สาย · ${Lm.toFixed(0)} ม.`, color, k * 0.9);
+    }
+  });
+}
+
+function conduitCallout(g, anchor, dir, lines, color, k) {
+  const off = 52 * k;
+  const cx = anchor.x + dir.x * off, cy = anchor.y + dir.y * off;
+  g.font = `${11 * k}px "Segoe UI", "Leelawadee UI", sans-serif`;
+  const w = Math.max(...lines.map(t => g.measureText(t).width)) + 14 * k;
+  const lh = 14.5 * k, h = lines.length * lh + 8 * k;
+  const x = cx - w / 2, y = cy - h / 2;
+  // เส้นชี้จากแนวท่อไปยังกรอบ (วาดก่อน ให้กรอบทับปลายเส้น)
+  g.strokeStyle = color; g.lineWidth = 1.2 * k;
+  g.beginPath(); g.moveTo(anchor.x, anchor.y); g.lineTo(cx, cy); g.stroke();
+  g.fillStyle = color;
+  g.beginPath(); g.arc(anchor.x, anchor.y, 2.5 * k, 0, Math.PI * 2); g.fill();
+  g.fillStyle = 'rgba(10,15,28,.92)';
+  roundRect(g, x, y, w, h, 4 * k); g.fill();
+  g.strokeStyle = color; g.lineWidth = 1.2 * k; roundRect(g, x, y, w, h, 4 * k); g.stroke();
+  g.fillStyle = '#e2e8f0'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  lines.forEach((t, i) => g.fillText(t, cx, y + 4 * k + lh * (i + 0.5)));
 }
 
 function crossMark(g, p, k) {
@@ -1383,7 +1425,7 @@ $('#btnAutoRoute').addEventListener('click', autoRouteAll);
 $('#btnDeleteSel').addEventListener('click', deleteSelected);
 $('#btnZoomFit').addEventListener('click', () => { fitView(); $('#statusZoom').textContent = `${Math.round(state.view.s * 100)}%`; draw(); });
 $('#chkOrtho').addEventListener('change', draw);
-$('#chkConduit').addEventListener('change', draw);
+$('#selConduit').addEventListener('change', draw);
 $('#btnClear').addEventListener('click', () => {
   if (!confirm('ล้างจุดอุปกรณ์ แนวสาย ขอบอาคาร และสเกลทั้งหมด?')) return;
   Object.assign(state, {
@@ -1680,7 +1722,7 @@ function conduitHTML() {
 function recommendationsHTML() {
   return `<ol>
     <li><strong>ระยะสาย LAN:</strong> CAT6 เดินได้ไม่เกิน ${CAT6_MAX} ม. (มาตรฐาน TIA-568 รับรองที่ 100 ม. — ช่วง 100–${CAT6_MAX} ม. ให้ใช้โหมด Extended PoE ของสวิตช์ Hikvision ซึ่งลดความเร็วเหลือ 10 Mbps เพียงพอสำหรับกล้อง) หากเกินให้ใช้ Fiber Optic + Media Converter/SFP และจ่ายไฟกล้องจากแหล่งจ่ายใกล้จุดติดตั้ง</li>
-    <li><strong>ท่อร้อยสาย (วสท. 022001-22 / TIA-569):</strong> fill ratio ตามจำนวนสายที่เดินร่วมท่อจริง — 1 เส้น 53%, 2 เส้น 31%, ≥3 เส้น 40% (ดูขนาดท่อจริงต่อช่วงในหัวข้อ "ท่อร้อยสายและอุปกรณ์ประกอบ" หรือเปิด "แสดงท่อร้อยสาย" บนแบบแปลน)</li>
+    <li><strong>ท่อร้อยสาย (วสท. 022001-22 / TIA-569):</strong> fill ratio ตามจำนวนสายที่เดินร่วมท่อจริง — 1 เส้น 53%, 2 เส้น 31%, ≥3 เส้น 40% (ดูขนาดท่อจริงต่อช่วงในหัวข้อ "ท่อร้อยสายและอุปกรณ์ประกอบ" หรือเลือกรูปแบบแสดงผลที่ตัวเลือก "ท่อร้อยสาย" บนแถบเครื่องมือ)</li>
     <li><strong>เลือกชนิดท่อตามสภาพแวดล้อม:</strong> ภายในอาคาร/ในร่มใช้ <strong>EMT</strong> · ภายนอกอาคารโดนแดดฝนใช้ <strong>IMC</strong> (โลหะหนา กันน้ำ) หรือ <strong>uPVC ทน UV</strong> พร้อมข้อต่อ/คอนเน็คเตอร์แบบกันน้ำ (Rain-tight) · ฝังดินใช้ <strong>HDPE/PE</strong> ฝังลึก ≥ 60 ซม. รองทรายก้นร่อง 10 ซม. พร้อมเทปเตือนแนวสายเหนือท่อ 30 ซม. และทำบ่อพัก (Handhole) ทุก ~50 ม.</li>
     <li><strong>จุดดึงสาย:</strong> ติดตั้ง Pull Box ทุก ๆ ~30 ม. หรือเมื่อหักมุม 90° สะสมครบ 2 จุด เพื่อลดแรงดึง (แรงดึง CAT6 ไม่เกิน 110 N)</li>
     <li><strong>รัศมีโค้งงอ:</strong> CAT6 ≥ 4 เท่าของเส้นผ่านศูนย์กลางสาย (~25 มม.) · Fiber ≥ 20 เท่า (~120 มม.) ขณะดึงสาย</li>
