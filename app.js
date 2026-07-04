@@ -140,8 +140,11 @@ function deviceById(id) { return state.devices.find(d => d.id === id); }
    ท่อร่วม (conduit sharing) — แตกเส้นทุกเส้นเป็นช่วงย่อยตามแนวเส้นตรงจริง
    นับสายที่ทับแนวเดียวกันจริง แล้วรวมช่วงติดกันที่มีสายชุดเดียวกันเป็นท่อเดียว
    ============================================================ */
+const CONDUIT_MERGE_TOL_M = 0.3; // เมตร — ระยะตั้งฉากสูงสุดที่ยังถือว่า "เดินในท่อเดียวกัน"
+
 function conduitAnalysis() {
   if (!state.pxPerM) return [];
+  const dTol = CONDUIT_MERGE_TOL_M * state.pxPerM; // แปลงเป็นพิกเซลโลกตามมาตราส่วนจริง
   const segList = [];
   for (const r of state.routes) {
     if (routeLenM(r) == null) continue;
@@ -161,7 +164,7 @@ function conduitAnalysis() {
     if (Math.abs(ang - Math.PI) < 1e-6) ang = 0;
     const ux = Math.cos(ang), uy = Math.sin(ang), nx = -uy, ny = ux;
     const d = s.a.x * nx + s.a.y * ny;
-    const key = `${s.env}|${Math.round(ang / Math.PI * 2000)}|${Math.round(d / 3)}`;
+    const key = `${s.env}|${Math.round(ang / Math.PI * 2000)}|${Math.round(d / dTol)}`;
     s.ux = ux; s.uy = uy; s.nx = nx; s.ny = ny; s.d = d;
     s.t0 = s.a.x * ux + s.a.y * uy;
     s.t1 = s.b.x * ux + s.b.y * uy;
@@ -1856,5 +1859,6 @@ resizeCanvas();
 setMode('select');
 loadLocal();
 refresh();
+window.__DEBUG_STATE = state; window.__DEBUG_conduitAnalysis = conduitAnalysis; window.__DEBUG_refresh = refresh;
 
 })();
