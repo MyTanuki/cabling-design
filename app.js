@@ -123,7 +123,92 @@ function conduitFor(n, od) {
   }
   return CONDUITS[CONDUITS.length - 1].label + ' ×หลายท่อ';
 }
+// ขนาดท่อจากรายการ OD ของสายที่ทับกันในช่วงเดียวกันจริง (fill ratio ตาม วสท. 022001-22: 53/31/40%)
+function conduitSizeForOds(ods) {
+  const n = ods.length;
+  const fill = n === 1 ? 0.53 : n === 2 ? 0.31 : 0.40;
+  const area = ods.reduce((a, od) => a + Math.PI * od * od / 4, 0);
+  const need = area / fill;
+  for (let i = 0; i < CONDUITS.length; i++) {
+    if (Math.PI * CONDUITS[i].idmm * CONDUITS[i].idmm / 4 >= need) return { idx: i, label: CONDUITS[i].label };
+  }
+  return { idx: CONDUITS.length - 1, label: CONDUITS[CONDUITS.length - 1].label + ' ×หลายท่อ' };
+}
 function deviceById(id) { return state.devices.find(d => d.id === id); }
+
+/* ============================================================
+   ท่อร่วม (conduit sharing) — แตกเส้นทุกเส้นเป็นช่วงย่อยตามแนวเส้นตรงจริง
+   นับสายที่ทับแนวเดียวกันจริง แล้วรวมช่วงติดกันที่มีสายชุดเดียวกันเป็นท่อเดียว
+   ============================================================ */
+function conduitAnalysis() {
+  if (!state.pxPerM) return [];
+  const segList = [];
+  for (const r of state.routes) {
+    if (routeLenM(r) == null) continue;
+    const cable = CABLES[effCable(r)];
+    const env = r.env || 'outdoor';
+    for (let i = 1; i < r.points.length; i++) {
+      const a = r.points[i - 1], b = r.points[i];
+      if (dist(a, b) < 0.5) continue;
+      segList.push({ a, b, od: cable.od, env, routeId: r.id });
+    }
+  }
+  // จัดกลุ่มช่วงที่อยู่บนเส้นตรงเดียวกัน (ทิศทาง+ระยะตั้งฉากจากจุดอ้างอิงเท่ากัน) และสภาพแวดล้อมเดียวกัน
+  const lineGroups = new Map();
+  for (const s of segList) {
+    let ang = Math.atan2(s.b.y - s.a.y, s.b.x - s.a.x);
+    if (ang < 0) ang += Math.PI;
+    if (Math.abs(ang - Math.PI) < 1e-6) ang = 0;
+    const ux = Math.cos(ang), uy = Math.sin(ang), nx = -uy, ny = ux;
+    const d = s.a.x * nx + s.a.y * ny;
+    const key = `${s.env}|${Math.round(ang / Math.PI * 2000)}|${Math.round(d / 3)}`;
+    s.ux = ux; s.uy = uy; s.nx = nx; s.ny = ny; s.d = d;
+    s.t0 = s.a.x * ux + s.a.y * uy;
+    s.t1 = s.b.x * ux + s.b.y * uy;
+    if (s.t0 > s.t1) { const tmp = s.t0; s.t0 = s.t1; s.t1 = tmp; }
+    if (!lineGroups.has(key)) lineGroups.set(key, []);
+    lineGroups.get(key).push(s);
+  }
+  const runs = [];
+  for (const segs of lineGroups.values()) {
+    const bounds = [...new Set(segs.flatMap(s => [s.t0, s.t1]))].sort((a, b) => a - b);
+    const micro = [];
+    for (let i = 1; i < bounds.length; i++) {
+      const t0 = bounds[i - 1], t1 = bounds[i];
+      if (t1 - t0 < 0.5) continue;
+      const mid = (t0 + t1) / 2;
+      const covering = segs.filter(s => s.t0 <= mid + 1e-6 && s.t1 >= mid - 1e-6);
+      if (!covering.length) continue;
+      const routeIds = [...new Set(covering.map(s => s.routeId))].sort((a, b) => a - b);
+      const ods = routeIds.map(id => covering.find(s => s.routeId === id).od);
+      micro.push({ t0, t1, env: covering[0].env, routeIds, ods, base: covering[0] });
+    }
+    // รวมช่วงติดกันที่มีชุดสายเดียวกันเข้าเป็นท่อเดียว
+    for (let i = 0; i < micro.length; i++) {
+      let j = i;
+      const setKey = micro[i].routeIds.join(',');
+      while (j + 1 < micro.length && micro[j + 1].routeIds.join(',') === setKey && micro[j + 1].t0 - micro[j].t1 < 1) j++;
+      const m0 = micro[i], m1 = micro[j], s0 = m0.base;
+      const p0 = { x: s0.d * s0.nx + m0.t0 * s0.ux, y: s0.d * s0.ny + m0.t0 * s0.uy };
+      const p1 = { x: s0.d * s0.nx + m1.t1 * s0.ux, y: s0.d * s0.ny + m1.t1 * s0.uy };
+      const size = conduitSizeForOds(m0.ods);
+      runs.push({ env: m0.env, p0, p1, lenPx: m1.t1 - m0.t0, count: m0.routeIds.length, sizeIdx: size.idx, size: size.label });
+      i = j;
+    }
+  }
+  return runs;
+}
+
+function conduitBends(env) {
+  const seen = new Set();
+  for (const r of state.routes) {
+    if ((r.env || 'outdoor') !== env || routeLenM(r) == null) continue;
+    for (let i = 1; i < r.points.length - 1; i++) {
+      seen.add(Math.round(r.points[i].x) + ',' + Math.round(r.points[i].y));
+    }
+  }
+  return seen.size;
+}
 
 function nextLabel(type) {
   if (type === 'onu') return 'ONU';
@@ -207,6 +292,7 @@ function makeRouter(devs) {
     return {
       path: (a, b) => manhattanPts(a, b),
       dist: (a, b) => polyLenPx(manhattanPts(a, b)),
+      commit: () => {},
       alts,
     };
   }
@@ -249,6 +335,9 @@ function makeRouter(devs) {
 
   const cache = new Map();
   const edgeKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
+  // reuseBias: Map edgeKey → ตัวคูณน้ำหนัก < 1 ลดต้นทุนช่วงที่มีสายเดินผ่านแล้ว
+  // เพื่อให้สายเส้นถัด ๆ ไปเลือกเดินร่วมท่อเดิมแทนที่จะแยกท่อใหม่โดยไม่จำเป็น
+  const reuseBias = new Map();
   // penal: Map edgeKey → ตัวคูณน้ำหนัก ใช้กดเส้นทางเดิมเพื่อหาเส้นทางสำรอง
   function dijkstra(srcK, penal) {
     if (!penal && cache.has(srcK)) return cache.get(srcK);
@@ -292,10 +381,22 @@ function makeRouter(devs) {
       const direct = dist(a, b) <= branchPx ? [{ x: a.x, y: a.y }, { x: b.x, y: b.y }] : null;
       const ka = keyOf(a), kb = keyOf(b);
       if (ka === kb || !adj.has(ka) || !adj.has(kb)) return direct;
-      const keys = rawPath(ka, kb, null);
+      const keys = rawPath(ka, kb, reuseBias.size ? reuseBias : null);
       if (!keys) return direct; // กราฟไม่ต่อถึงกัน — ยอมให้เฉพาะระยะใกล้มาก
       if (direct && polyLenPx(direct) < keysLen(keys)) return direct;
       return keysPts(keys);
+    },
+    // เรียกหลังจาก path(a,b) ถูกใช้จริงแล้ว — กดต้นทุนช่วงที่เพิ่งเดินผ่านให้ถูกลง
+    // เพื่อให้สายเส้นถัดไปเลือกใช้ท่อร่วมเดิมเมื่อเป็นไปได้ (ลดจำนวนท่อที่ต้องเดินแยก)
+    commit(a, b) {
+      const ka = keyOf(a), kb = keyOf(b);
+      if (ka === kb || !adj.has(ka) || !adj.has(kb)) return;
+      const keys = rawPath(ka, kb, reuseBias.size ? reuseBias : null);
+      if (!keys) return;
+      for (let i = 1; i < keys.length; i++) {
+        const ek = edgeKey(keys[i - 1], keys[i]);
+        reuseBias.set(ek, Math.max(0.35, (reuseBias.get(ek) || 1) * 0.55));
+      }
     },
     dist(a, b) {
       const ka = keyOf(a), kb = keyOf(b);
@@ -506,6 +607,7 @@ function autoRouteAll() {
     if (!a || !b || has(a, b)) return false;
     const pts = router.path(a, b);
     if (!pts) { skipped.push(`${a.label}→${b.label}`); return false; } // ห้ามลากนอกแนว
+    router.commit(a, b); // ลดต้นทุนช่วงนี้ไว้ ให้เส้นถัดไปเลือกร่วมท่อเดิมได้ถ้าคุ้ม
     state.routes.push({
       id: state.nextId++, fromId: a.id, toId: b.id,
       points: pts, override: 'auto', env: 'outdoor', auto: true,
@@ -633,6 +735,9 @@ function drawScene(g, proj, k, opts = {}) {
     }
   }
 
+  // ---- ท่อร้อยสายจริง (casing สี+จำนวนสายทับกัน) — toggle #chkConduit ----
+  if ($('#chkConduit').checked) drawConduitOverlay(g, proj, k);
+
   // ---- routes ----
   for (const r of state.routes) {
     const cable = CABLES[effCable(r)];
@@ -753,6 +858,34 @@ function drawWall(g, pts, k, sel) {
   g.fillStyle = '#22d3ee';
   for (const p of pts) { g.beginPath(); g.arc(p.x, p.y, 2.5 * k, 0, Math.PI * 2); g.fill(); }
   g.restore();
+}
+
+const CONDUIT_COLORS = ['#94a3b8', '#60a5fa', '#34d399', '#fbbf24', '#f97316'];
+
+function drawConduitOverlay(g, proj, k) {
+  for (const run of conduitAnalysis()) {
+    const a = proj(run.p0), b = proj(run.p1);
+    const color = CONDUIT_COLORS[Math.min(run.sizeIdx, CONDUIT_COLORS.length - 1)];
+    g.save();
+    g.lineCap = 'butt'; g.globalAlpha = 0.55;
+    g.strokeStyle = color; g.lineWidth = 8 * k;
+    g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
+    g.globalAlpha = 1;
+    // ขีดจำนวนสายที่ทับกันในท่อนี้
+    const len = dist(a, b);
+    if (len > 4) {
+      const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len, nx = -uy, ny = ux;
+      for (let c = 1; c <= run.count; c++) {
+        const t = len * c / (run.count + 1);
+        const px = a.x + ux * t, py = a.y + uy * t;
+        g.strokeStyle = 'rgba(15,23,42,.9)'; g.lineWidth = 1.5 * k;
+        g.beginPath(); g.moveTo(px - nx * 4 * k, py - ny * 4 * k); g.lineTo(px + nx * 4 * k, py + ny * 4 * k); g.stroke();
+      }
+    }
+    g.restore();
+    pill(g, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+      `${run.size.replace(' ×หลายท่อ', '')} ×${run.count}`, color, k * 0.9);
+  }
 }
 
 function crossMark(g, p, k) {
@@ -1178,6 +1311,7 @@ $('#btnAutoRoute').addEventListener('click', autoRouteAll);
 $('#btnDeleteSel').addEventListener('click', deleteSelected);
 $('#btnZoomFit').addEventListener('click', () => { fitView(); $('#statusZoom').textContent = `${Math.round(state.view.s * 100)}%`; draw(); });
 $('#chkOrtho').addEventListener('change', draw);
+$('#chkConduit').addEventListener('change', draw);
 $('#btnClear').addEventListener('click', () => {
   if (!confirm('ล้างจุดอุปกรณ์ แนวสาย ขอบอาคาร และสเกลทั้งหมด?')) return;
   Object.assign(state, {
@@ -1393,52 +1527,69 @@ function renderEquipment() {
   $('#recoBox').innerHTML = recommendationsHTML();
 }
 
-/* ---------- สรุปท่อร้อยสาย + อุปกรณ์ประกอบ แยกตามสภาพแวดล้อม ---------- */
+/* ---------- สรุปท่อร้อยสาย + อุปกรณ์ประกอบ แยกตามสภาพแวดล้อมและขนาดท่อจริง ---------- */
 function conduitSummaryData() {
+  const runs = conduitAnalysis();
   const groups = {};
-  for (const r of state.routes) {
-    const L = routeLenM(r);
-    if (L == null) continue;
-    const env = r.env || 'outdoor';
-    const g = groups[env] || (groups[env] = { len: 0, routes: 0, bends: 0, pull: 0, hand: 0, sticks: 0, coup: 0 });
-    g.len += L; g.routes++;
-    g.bends += Math.max(0, r.points.length - 2);
-    g.pull += Math.max(0, Math.ceil(L / 30) - 1);      // กล่องพักสายทุก ~30 ม.
-    g.hand += Math.max(0, Math.ceil(L / 50) - 1);      // บ่อพักใต้ดินทุก ~50 ม.
-    const st = Math.ceil(L / 3);                        // ท่อมาตรฐานเส้นละ 3 ม.
-    g.sticks += st;
-    g.coup += Math.max(0, st - 1);
+  for (const run of runs) {
+    const g = groups[run.env] || (groups[run.env] = { totalLen: 0, bySize: new Map() });
+    const Lm = run.lenPx / state.pxPerM;
+    g.totalLen += Lm;
+    const sz = g.bySize.get(run.size) || { len: 0, maxCount: 0, idx: run.sizeIdx };
+    sz.len += Lm;
+    sz.maxCount = Math.max(sz.maxCount, run.count);
+    g.bySize.set(run.size, sz);
+  }
+  for (const env of Object.keys(groups)) {
+    const g = groups[env];
+    g.routes = state.routes.filter(r => (r.env || 'outdoor') === env && routeLenM(r) != null).length;
+    g.pull = Math.max(0, Math.ceil(g.totalLen / 30) - 1);   // กล่องพักสายทุก ~30 ม.
+    g.hand = Math.max(0, Math.ceil(g.totalLen / 50) - 1);   // บ่อพักใต้ดินทุก ~50 ม.
+    g.bends = conduitBends(env);
   }
   return groups;
 }
 
 function conduitRows(env, g) {
-  const L = Math.ceil(g.len);
-  if (env === 'indoor') return [
-    ['ท่อ EMT (เส้นละ 3 ม.)', `${g.sticks} เส้น (~${L} ม.)`],
-    ['ข้อต่อตรง EMT (Coupling)', `${g.coup} ตัว`],
+  const sizes = [...g.bySize.entries()].sort((a, b) => a[1].idx - b[1].idx);
+  const pipeLabel = env === 'indoor' ? 'ท่อ EMT' : env === 'outdoor' ? 'ท่อ IMC/uPVC กันน้ำ' : 'ท่อ HDPE/PE';
+  const rows = [];
+  let totalSticks = 0;
+  sizes.forEach(([size, d]) => {
+    if (env === 'buried') {
+      const reels = Math.ceil(d.len / 100);
+      rows.push([`${pipeLabel} ${size} (สูงสุด ${d.maxCount} สาย/ท่อ)`, `${reels} ม้วน (~${Math.ceil(d.len)} ม.)`]);
+      totalSticks += reels;
+    } else {
+      const sticks = Math.ceil(d.len / 3);
+      rows.push([`${pipeLabel} ${size} (สูงสุด ${d.maxCount} สาย/ท่อ, เส้นละ 3 ม.)`, `${sticks} เส้น (~${Math.ceil(d.len)} ม.)`]);
+      totalSticks += sticks;
+    }
+  });
+  const coup = Math.max(0, totalSticks - sizes.length);
+  if (env === 'indoor') rows.push(
+    ['ข้อต่อตรง EMT (Coupling)', `${coup} ตัว`],
     ['คอนเน็คเตอร์ EMT เข้ากล่อง/ตู้', `${g.routes * 2} ตัว`],
     ['จุดดัดโค้ง 90° (ดัดด้วยเบนเดอร์)', `${g.bends} จุด`],
-    ['แคล้มป์จับท่อ + พุก (ทุก 1.5 ม.)', `${Math.ceil(g.len / 1.5)} ชุด`],
+    ['แคล้มป์จับท่อ + พุก (ทุก 1.5 ม.)', `${Math.ceil(g.totalLen / 1.5)} ชุด`],
     ['กล่องพักสาย (Pull Box)', `${g.pull} กล่อง`],
-  ];
-  if (env === 'outdoor') return [
-    ['ท่อ IMC หรือ uPVC กันน้ำ/ทน UV (เส้นละ 3 ม.)', `${g.sticks} เส้น (~${L} ม.)`],
-    ['ข้อต่อตรงกันน้ำ (Rain-tight Coupling)', `${g.coup} ตัว`],
+  );
+  else if (env === 'outdoor') rows.push(
+    ['ข้อต่อตรงกันน้ำ (Rain-tight Coupling)', `${coup} ตัว`],
     ['คอนเน็คเตอร์กันน้ำ + ล็อคนัท + บุชชิ่ง', `${g.routes * 2} ชุด`],
     ['ข้องอ 90° กันน้ำ', `${g.bends} ตัว`],
-    ['แคล้มป์สแตนเลส/ก้ามปู + พุก (ทุก 1.5 ม.)', `${Math.ceil(g.len / 1.5)} ชุด`],
+    ['แคล้มป์สแตนเลส/ก้ามปู + พุก (ทุก 1.5 ม.)', `${Math.ceil(g.totalLen / 1.5)} ชุด`],
     ['กล่องพักสายกันน้ำ IP66', `${g.pull} กล่อง`],
     ['ซิลิโคน/เทปพันเกลียวกันซึม', `${g.routes} ชุด`],
-  ];
-  return [ // buried
-    ['ท่อ HDPE/PE (ม้วนละ 100 ม.)', `${Math.ceil(g.len / 100)} ม้วน (~${L} ม.)`],
-    ['ข้อต่อ Compression HDPE', `${Math.max(0, Math.ceil(g.len / 100) - 1) + g.hand} ตัว`],
+  );
+  else rows.push(
+    ['ข้อต่อ Compression HDPE', `${coup + g.hand} ตัว`],
     ['บ่อพักสาย (Handhole) ทุก ~50 ม.', `${g.hand} บ่อ`],
     ['ชุดท่อโค้งขึ้นผนัง (Riser ท่อ GI + ข้องอ)', `${g.routes * 2} ชุด`],
-    ['เทปเตือนแนวสายใต้ดิน (ฝังเหนือท่อ 30 ซม.)', `~${L} ม.`],
-    ['ทรายรองก้นร่อง หนา 10 ซม.', `~${(g.len * 0.03).toFixed(1)} ลบ.ม.`],
-  ];
+    ['เทปเตือนแนวสายใต้ดิน (ฝังเหนือท่อ 30 ซม.)', `~${Math.ceil(g.totalLen)} ม.`],
+    ['ทรายรองก้นร่อง หนา 10 ซม.', `~${(g.totalLen * 0.03).toFixed(1)} ลบ.ม.`],
+  );
+  return rows;
 }
 
 function conduitHTML() {
@@ -1448,7 +1599,7 @@ function conduitHTML() {
     return '<p class="muted">ยังไม่มีแนวเดินสายที่วัดระยะได้ — เลือกสภาพแวดล้อมของแต่ละเส้น (ในร่ม/กลางแจ้ง/ฝังดิน) ได้ในตารางการเชื่อมต่อ</p>';
   return keys.map(k => {
     const g = groups[k];
-    return `<h4 class="env-h">${ENVS[k].name} — ท่อ ${ENVS[k].pipe} (${g.routes} เส้นทาง, ~${Math.ceil(g.len)} ม.)</h4>
+    return `<h4 class="env-h">${ENVS[k].name} — ท่อ ${ENVS[k].pipe} (${g.routes} เส้นทาง, รวม ~${Math.ceil(g.totalLen)} ม. ของท่อจริงหลังนับสายทับกัน)</h4>
       <table><tbody>${conduitRows(k, g).map(r =>
         `<tr><td>${r[0]}</td><td class="num">${r[1]}</td></tr>`).join('')}</tbody></table>`;
   }).join('');
@@ -1457,7 +1608,7 @@ function conduitHTML() {
 function recommendationsHTML() {
   return `<ol>
     <li><strong>ระยะสาย LAN:</strong> CAT6 เดินได้ไม่เกิน ${CAT6_MAX} ม. (มาตรฐาน TIA-568 รับรองที่ 100 ม. — ช่วง 100–${CAT6_MAX} ม. ให้ใช้โหมด Extended PoE ของสวิตช์ Hikvision ซึ่งลดความเร็วเหลือ 10 Mbps เพียงพอสำหรับกล้อง) หากเกินให้ใช้ Fiber Optic + Media Converter/SFP และจ่ายไฟกล้องจากแหล่งจ่ายใกล้จุดติดตั้ง</li>
-    <li><strong>ท่อร้อยสาย (TIA-569):</strong> fill ratio ไม่เกิน 40% — สาย CAT6 1 เส้นใช้ท่อ 20 มม. (3/4"), 2 เส้น 25 มม. (1"), 3–4 เส้น 32 มม., 5–7 เส้น 40 มม.</li>
+    <li><strong>ท่อร้อยสาย (วสท. 022001-22 / TIA-569):</strong> fill ratio ตามจำนวนสายที่เดินร่วมท่อจริง — 1 เส้น 53%, 2 เส้น 31%, ≥3 เส้น 40% (ดูขนาดท่อจริงต่อช่วงในหัวข้อ "ท่อร้อยสายและอุปกรณ์ประกอบ" หรือเปิด "แสดงท่อร้อยสาย" บนแบบแปลน)</li>
     <li><strong>เลือกชนิดท่อตามสภาพแวดล้อม:</strong> ภายในอาคาร/ในร่มใช้ <strong>EMT</strong> · ภายนอกอาคารโดนแดดฝนใช้ <strong>IMC</strong> (โลหะหนา กันน้ำ) หรือ <strong>uPVC ทน UV</strong> พร้อมข้อต่อ/คอนเน็คเตอร์แบบกันน้ำ (Rain-tight) · ฝังดินใช้ <strong>HDPE/PE</strong> ฝังลึก ≥ 60 ซม. รองทรายก้นร่อง 10 ซม. พร้อมเทปเตือนแนวสายเหนือท่อ 30 ซม. และทำบ่อพัก (Handhole) ทุก ~50 ม.</li>
     <li><strong>จุดดึงสาย:</strong> ติดตั้ง Pull Box ทุก ๆ ~30 ม. หรือเมื่อหักมุม 90° สะสมครบ 2 จุด เพื่อลดแรงดึง (แรงดึง CAT6 ไม่เกิน 110 N)</li>
     <li><strong>รัศมีโค้งงอ:</strong> CAT6 ≥ 4 เท่าของเส้นผ่านศูนย์กลางสาย (~25 มม.) · Fiber ≥ 20 เท่า (~120 มม.) ขณะดึงสาย</li>
