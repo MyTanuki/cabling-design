@@ -1859,6 +1859,5 @@ resizeCanvas();
 setMode('select');
 loadLocal();
 refresh();
-window.__DEBUG_STATE = state; window.__DEBUG_conduitAnalysis = conduitAnalysis; window.__DEBUG_refresh = refresh;
 
 })();

@@ -6,12 +6,6 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["--yes", "http-server", "-p", "5179", "-c-1", "."],
       "port": 5179
-    },
-    {
-      "name": "cctv-designer-debug",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["--yes", "http-server", "-p", "5183", "-c-1", "."],
-      "port": 5183
     }
   ]
 }
