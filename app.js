@@ -264,6 +264,53 @@ function wallSegs() {
   state.walls.forEach(w => { for (let i = 1; i < w.points.length; i++) segs.push([w.points[i - 1], w.points[i]]); });
   return segs;
 }
+
+/* ============================================================
+   ตรวจสอบว่าเส้นขอบอาคาร/แนวท่อแต่ละเส้น "เชื่อมถึงกันจริง" หรือไม่
+   (ใช้กติกาเดียวกับที่ตัวหาเส้นทางใช้จริง: ต้องตัดกันหรือปลายจุดตรงกันพอดี
+   แค่วางเส้นให้ดูใกล้กันบนจอไม่พอ — ป้องกันปัญหาที่เจอบ่อยว่าเส้นเชื่อมหยุดสั้นไปนิดเดียว)
+   ============================================================ */
+const WALL_TOUCH_PX = 1; // พิกเซลโลก — ถือว่า "จุดเดียวกัน" ถ้าห่างกันไม่เกินนี้
+
+function wallsTouch(wi, wj) {
+  const endsI = [wi.points[0], wi.points[wi.points.length - 1]];
+  const endsJ = [wj.points[0], wj.points[wj.points.length - 1]];
+  for (const a of endsI) for (const b of endsJ) if (dist(a, b) < WALL_TOUCH_PX) return true;
+  for (let a = 1; a < wi.points.length; a++)
+    for (let b = 1; b < wj.points.length; b++)
+      if (segIntersect(wi.points[a - 1], wi.points[a], wj.points[b - 1], wj.points[b])) return true;
+  return false;
+}
+
+// กลุ่มเส้นขอบอาคารที่เชื่อมถึงกัน — คืน Map(wallId -> componentIndex)
+function wallComponentMap() {
+  const walls = state.walls;
+  const parent = walls.map((_, i) => i);
+  const find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < walls.length; i++)
+    for (let j = i + 1; j < walls.length; j++)
+      if (wallsTouch(walls[i], walls[j])) { const a = find(i), b = find(j); if (a !== b) parent[a] = b; }
+  const rootIdx = new Map(), map = new Map();
+  walls.forEach((w, i) => {
+    const r = find(i);
+    if (!rootIdx.has(r)) rootIdx.set(r, rootIdx.size);
+    map.set(w.id, rootIdx.get(r));
+  });
+  return map;
+}
+
+// จุดปลายของเส้น w ที่ p ลอยอิสระ ไม่แตะเส้นอื่นเลย (ไม่นับปลายทั้งสองที่ชนกันเองตอนวาดเป็นลูปปิด)
+function isDanglingEnd(w, p) {
+  const other = w.points[0] === p ? w.points[w.points.length - 1] : w.points[0];
+  if (dist(p, other) < WALL_TOUCH_PX) return false; // ลูปปิด ปลายชนกันเอง ไม่ถือว่าลอย
+  for (const w2 of state.walls) {
+    if (w2 === w) continue;
+    if (dist(p, w2.points[0]) < WALL_TOUCH_PX || dist(p, w2.points[w2.points.length - 1]) < WALL_TOUCH_PX) return false;
+    for (let i = 1; i < w2.points.length; i++)
+      if (projToSeg(p, w2.points[i - 1], w2.points[i]).d < WALL_TOUCH_PX) return false;
+  }
+  return true;
+}
 function manhattanPts(a, b) {
   const pts = [{ x: a.x, y: a.y }];
   if ($('#chkOrtho').checked && Math.abs(a.x - b.x) > 1 && Math.abs(a.y - b.y) > 1)
@@ -719,9 +766,14 @@ function drawScene(g, proj, k, opts = {}) {
   }
 
   // ---- walls (ขอบอาคาร/แนวท่อ) ----
+  // ถ้ามีมากกว่า 1 เส้น ให้ไล่สีตามกลุ่มที่เชื่อมถึงกันจริง (ตัดกัน/ปลายชนกัน) เพื่อให้เห็นทันทีว่า
+  // เส้นไหนยังไม่เชื่อมกับเครือข่ายหลัก — ถ้าเชื่อมเป็นกลุ่มเดียวหมดจะได้สีฟ้าเดิมทุกเส้น (ไม่มีอะไรเปลี่ยน)
+  const wallCompMap = state.walls.length > 1 ? wallComponentMap() : null;
   for (const wl of state.walls) {
     const sel = state.selected && state.selected.kind === 'wall' && state.selected.id === wl.id;
-    drawWall(g, wl.points.map(proj), k, sel);
+    const color = wallCompMap ? WALL_GROUP_COLORS[wallCompMap.get(wl.id) % WALL_GROUP_COLORS.length] : null;
+    const dangle = [isDanglingEnd(wl, wl.points[0]), isDanglingEnd(wl, wl.points[wl.points.length - 1])];
+    drawWall(g, wl.points.map(proj), k, sel, color, dangle);
   }
   if (opts.screen && state.wallDraft) {
     drawWall(g, state.wallDraft.points.map(proj), k, true);
@@ -842,10 +894,13 @@ function roundRect(g, x, y, w, h, r) {
   g.closePath();
 }
 
-function drawWall(g, pts, k, sel) {
+const WALL_GROUP_COLORS = ['#22d3ee', '#f472b6', '#a3e635', '#fb923c', '#c084fc', '#facc15'];
+
+function drawWall(g, pts, k, sel, color, dangle) {
   if (pts.length < 1) return;
+  color = color || '#22d3ee';
   g.save();
-  g.strokeStyle = sel ? '#67e8f9' : 'rgba(34,211,238,.8)';
+  g.strokeStyle = sel ? '#67e8f9' : color;
   g.lineWidth = (sel ? 3 : 2) * k;
   g.setLineDash([7 * k, 4 * k]);
   if (sel) { g.shadowColor = '#22d3ee'; g.shadowBlur = 10 * k; }
@@ -855,8 +910,16 @@ function drawWall(g, pts, k, sel) {
     g.stroke();
   }
   g.setLineDash([]);
-  g.fillStyle = '#22d3ee';
+  g.fillStyle = color;
   for (const p of pts) { g.beginPath(); g.arc(p.x, p.y, 2.5 * k, 0, Math.PI * 2); g.fill(); }
+  // ปลายเส้นที่ลอยอิสระ (ไม่แตะเส้นอื่น) — วงกลมเตือนสีส้ม
+  if (dangle) {
+    [[0, dangle[0]], [pts.length - 1, dangle[1]]].forEach(([i, isDangling]) => {
+      if (!isDangling || !pts[i]) return;
+      g.strokeStyle = '#f97316'; g.lineWidth = 2 * k;
+      g.beginPath(); g.arc(pts[i].x, pts[i].y, 7 * k, 0, Math.PI * 2); g.stroke();
+    });
+  }
   g.restore();
 }
 
@@ -945,7 +1008,11 @@ function drawLegend(g, x, y, k) {
     { color: CABLES.cat6.color, text: `LAN CAT6 (≤ ${CAT6_MAX} ม.)` },
     { color: CABLES.fiber.color, text: `Fiber Optic (> ${CAT6_MAX} ม.)` },
   ];
-  if (state.walls.length) rows.push({ color: '#22d3ee', text: 'ขอบอาคาร/แนวท่อ (อ้างอิง)', dash: true });
+  if (state.walls.length) {
+    const nGroups = state.walls.length > 1 ? new Set(wallComponentMap().values()).size : 1;
+    rows.push({ color: '#22d3ee', text: nGroups > 1 ? 'ขอบอาคาร/แนวท่อ (สีต่างกัน = ไม่เชื่อมถึงกัน)' : 'ขอบอาคาร/แนวท่อ (อ้างอิง)', dash: true });
+    if (nGroups > 1) rows.push({ color: '#f97316', text: 'วงกลมส้ม = ปลายเส้นลอย ไม่แตะเส้นอื่น' });
+  }
   const w = 210 * k, h = (18 + rows.length * 20 + 20) * k;
   g.fillStyle = 'rgba(15,23,42,.85)';
   roundRect(g, x, y, w, h, 8 * k); g.fill();
@@ -1626,6 +1693,16 @@ function renderWarnings() {
   const warns = [];
   if (state.img && !state.pxPerM)
     warns.push('ยังไม่ได้ตั้งมาตราส่วน — ระยะทางในตารางจะยังคำนวณไม่ได้ (ขั้นตอนที่ 2)');
+  // ตรวจว่าเส้นขอบอาคาร/แนวท่อที่วาดไว้ "เชื่อมถึงกันจริง" หรือแค่ดูใกล้กันบนจอ
+  if (state.walls.length > 1) {
+    const compMap = wallComponentMap();
+    const nGroups = new Set(compMap.values()).size;
+    if (nGroups > 1)
+      warns.push(`ขอบอาคาร/แนวท่อแยกเป็น ${nGroups} กลุ่มที่ไม่เชื่อมถึงกัน (ดูสีเส้นต่างกันบนแบบแปลน) — ลากเส้นเชื่อมให้ปลายทะลุเข้าไปในอีกเส้นจริงๆ ไม่ใช่แค่หยุดใกล้ๆ`);
+    const dangling = state.walls.filter(w => isDanglingEnd(w, w.points[0]) || isDanglingEnd(w, w.points[w.points.length - 1])).length;
+    if (dangling)
+      warns.push(`มีปลายเส้นขอบอาคาร/แนวท่อลอยอิสระ ${dangling} เส้น (วงกลมส้มบนแบบแปลน) — ถ้าตั้งใจเชื่อมกับเส้นอื่น ให้ลากปลายให้ทะลุเข้าไปในเส้นเป้าหมาย`);
+  }
   // กติกาเดินสายตามแนวเท่านั้น: อุปกรณ์ห่างแนวเกินระยะ branch + เส้นที่มีช่วงออกนอกแนว
   if (state.walls.length && state.pxPerM) {
     const segs = wallSegs();
