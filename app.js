@@ -156,24 +156,42 @@ function conduitAnalysis() {
       segList.push({ a, b, od: cable.od, env, routeId: r.id });
     }
   }
-  // จัดกลุ่มช่วงที่อยู่บนเส้นตรงเดียวกัน (ทิศทาง+ระยะตั้งฉากจากจุดอ้างอิงเท่ากัน) และสภาพแวดล้อมเดียวกัน
-  const lineGroups = new Map();
-  for (const s of segList) {
-    let ang = Math.atan2(s.b.y - s.a.y, s.b.x - s.a.x);
-    if (ang < 0) ang += Math.PI;
-    if (Math.abs(ang - Math.PI) < 1e-6) ang = 0;
-    const ux = Math.cos(ang), uy = Math.sin(ang), nx = -uy, ny = ux;
-    const d = s.a.x * nx + s.a.y * ny;
-    const key = `${s.env}|${Math.round(ang / Math.PI * 2000)}|${Math.round(d / dTol)}`;
-    s.ux = ux; s.uy = uy; s.nx = nx; s.ny = ny; s.d = d;
-    s.t0 = s.a.x * ux + s.a.y * uy;
-    s.t1 = s.b.x * ux + s.b.y * uy;
-    if (s.t0 > s.t1) { const tmp = s.t0; s.t0 = s.t1; s.t1 = tmp; }
-    if (!lineGroups.has(key)) lineGroups.set(key, []);
-    lineGroups.get(key).push(s);
-  }
+  // จัดกลุ่มช่วงที่อยู่บนเส้นตรงเดียวกันจริง (ปลายทั้งสองของกันและกันห่างแนวไม่เกิน dTol)
+  // และสภาพแวดล้อมเดียวกัน — จับคู่เชิงเรขาคณิตแทนการปัดค่าเป็น bucket เพราะช่วงที่มุม/ระยะ
+  // ก้ำกึ่งขอบ bucket จะถูกแยกกลุ่มทั้งที่ร้อยท่อเดียวกัน ทำให้ป้ายแสดงซ้ำซ้อนหลายรายการ
+  const perpDist = (p, s) => {
+    const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y;
+    return Math.abs((p.x - s.a.x) * dy - (p.y - s.a.y) * dx) / (Math.hypot(dx, dy) || 1);
+  };
+  const sameLine = (s1, s2) =>
+    perpDist(s2.a, s1) < dTol && perpDist(s2.b, s1) < dTol &&
+    perpDist(s1.a, s2) < dTol && perpDist(s1.b, s2) < dTol;
+  const parent = segList.map((_, i) => i);
+  const find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < segList.length; i++)
+    for (let j = i + 1; j < segList.length; j++) {
+      if (segList[i].env !== segList[j].env || !sameLine(segList[i], segList[j])) continue;
+      const a = find(i), b = find(j);
+      if (a !== b) parent[a] = b;
+    }
+  const clusters = new Map();
+  segList.forEach((s, i) => {
+    const r = find(i);
+    if (!clusters.has(r)) clusters.set(r, []);
+    clusters.get(r).push(s);
+  });
   const runs = [];
-  for (const segs of lineGroups.values()) {
+  for (const segs of clusters.values()) {
+    // แกนอ้างอิงร่วมของกลุ่มจากช่วงที่ยาวสุด แล้วฉายทุกช่วงลงแกนเดียวกัน
+    const ref = segs.reduce((m, s) => (dist(s.a, s.b) > dist(m.a, m.b) ? s : m));
+    const ang = Math.atan2(ref.b.y - ref.a.y, ref.b.x - ref.a.x);
+    const ux = Math.cos(ang), uy = Math.sin(ang), nx = -uy, ny = ux;
+    const d = ref.a.x * nx + ref.a.y * ny;
+    segs.forEach(s => {
+      s.t0 = s.a.x * ux + s.a.y * uy;
+      s.t1 = s.b.x * ux + s.b.y * uy;
+      if (s.t0 > s.t1) { const tmp = s.t0; s.t0 = s.t1; s.t1 = tmp; }
+    });
     const bounds = [...new Set(segs.flatMap(s => [s.t0, s.t1]))].sort((a, b) => a - b);
     const micro = [];
     for (let i = 1; i < bounds.length; i++) {
@@ -184,16 +202,16 @@ function conduitAnalysis() {
       if (!covering.length) continue;
       const routeIds = [...new Set(covering.map(s => s.routeId))].sort((a, b) => a - b);
       const ods = routeIds.map(id => covering.find(s => s.routeId === id).od);
-      micro.push({ t0, t1, env: covering[0].env, routeIds, ods, base: covering[0] });
+      micro.push({ t0, t1, env: covering[0].env, routeIds, ods });
     }
     // รวมช่วงติดกันที่มีชุดสายเดียวกันเข้าเป็นท่อเดียว
     for (let i = 0; i < micro.length; i++) {
       let j = i;
       const setKey = micro[i].routeIds.join(',');
       while (j + 1 < micro.length && micro[j + 1].routeIds.join(',') === setKey && micro[j + 1].t0 - micro[j].t1 < 1) j++;
-      const m0 = micro[i], m1 = micro[j], s0 = m0.base;
-      const p0 = { x: s0.d * s0.nx + m0.t0 * s0.ux, y: s0.d * s0.ny + m0.t0 * s0.uy };
-      const p1 = { x: s0.d * s0.nx + m1.t1 * s0.ux, y: s0.d * s0.ny + m1.t1 * s0.uy };
+      const m0 = micro[i], m1 = micro[j];
+      const p0 = { x: d * nx + m0.t0 * ux, y: d * ny + m0.t0 * uy };
+      const p1 = { x: d * nx + m1.t1 * ux, y: d * ny + m1.t1 * uy };
       const size = conduitSizeForOds(m0.ods);
       runs.push({ env: m0.env, p0, p1, lenPx: m1.t1 - m0.t0, count: m0.routeIds.length, sizeIdx: size.idx, size: size.label, routeIds: m0.routeIds });
       i = j;
@@ -952,29 +970,29 @@ function drawConduitOverlay(g, proj, k, mode) {
     g.restore();
     const Lm = run.lenPx / state.pxPerM;
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    // จำนวนสายแยกตามชนิด เช่น "CAT6 ×2 + Fiber ×1"
+    const byCable = {};
+    run.routeIds.forEach(id => {
+      const r = state.routes.find(x => x.id === id);
+      if (!r) return;
+      const nm = effCable(r) === 'cat6' ? 'CAT6' : 'Fiber';
+      byCable[nm] = (byCable[nm] || 0) + 1;
+    });
+    const cableLine = Object.entries(byCable).map(([nm, n]) => `${nm} ×${n}`).join(' + ') || `${run.count} สาย`;
     if (mode === 'callout') {
       // กรอบชี้เส้นแบบแบบแปลนวิศวกรรม: ยกกรอบออกด้านข้างแนวท่อ สลับฝั่งกันไม่ให้ซ้อน
       const ux = len ? (b.x - a.x) / len : 1, uy = len ? (b.y - a.y) / len : 0;
       const side = idx % 2 ? 1 : -1;
       const dir = { x: -uy * side, y: ux * side };
-      // จำนวนสายแยกตามชนิด เช่น "CAT6 ×2 + Fiber ×1"
-      const byCable = {};
-      run.routeIds.forEach(id => {
-        const r = state.routes.find(x => x.id === id);
-        if (!r) return;
-        const nm = effCable(r) === 'cat6' ? 'CAT6' : 'Fiber';
-        byCable[nm] = (byCable[nm] || 0) + 1;
-      });
-      const cableLine = Object.entries(byCable).map(([nm, n]) => `${nm} ×${n}`).join(' + ') || `${run.count} สาย`;
       conduitCallout(g, mid, dir, [
         `${ENVS[run.env].short} ${run.size}`,
         cableLine,
         `ยาว ${Lm.toFixed(0)} ม.`,
       ], color, k);
     } else {
-      // ป้ายบนเส้น: ชนิด ขนาด จำนวนสาย ความยาว — เลื่อนลงเล็กน้อยไม่ให้ทับป้ายระยะของเส้นสาย
+      // ป้ายบนเส้น: ชนิด ขนาด จำนวนสายแยกชนิด ความยาว — เลื่อนลงเล็กน้อยไม่ให้ทับป้ายระยะของเส้นสาย
       pill(g, { x: mid.x, y: mid.y + 18 * k },
-        `${ENVS[run.env].short} ${run.size.replace(' ×หลายท่อ', '')} · ${run.count} สาย · ${Lm.toFixed(0)} ม.`, color, k * 0.9);
+        `${ENVS[run.env].short} ${run.size.replace(' ×หลายท่อ', '')} · ${cableLine} · ${Lm.toFixed(0)} ม.`, color, k * 0.9);
     }
   });
 }
