@@ -853,19 +853,27 @@ function drawScene(g, proj, k, opts = {}) {
     const sel = state.selected && state.selected.kind === 'route' && state.selected.id === r.id;
     strokePoly(g, r.points.map(proj), cable.color, sel ? 6 * k : 4 * k, k, sel);
     // ป้ายระยะที่กึ่งกลางเส้น — โหมด "กรอบชี้เส้น" ใช้กรอบชี้แบบเดียวกับป้ายท่อ ไม่ทับบนเส้น
+    // ลากย้ายได้เหมือนป้ายท่อ (คีย์ r+id เก็บใน conduitLabelOffsets ชุดเดียวกัน)
     const L = routeLenM(r);
     const mid = polyMidpoint(r.points);
     const txt = L != null ? `${r.name || ''}${L.toFixed(0)} ม.` : '— ม.';
+    const rKey = 'r' + r.id;
+    const rOff = state.conduitLabelOffsets[rKey];
+    let rRect;
     if (conduitMode === 'callout') {
       const a = proj(r.points[0]), b = proj(r.points[r.points.length - 1]);
       const chord = dist(a, b);
       const ux = chord ? (b.x - a.x) / chord : 1, uy = chord ? (b.y - a.y) / chord : 0;
       const side = ri % 2 ? -1 : 1; // สลับฝั่ง (สวนทางกับ callout ของท่อ) ลดการซ้อนกัน
       const pm = proj(mid);
-      conduitCallout(g, pm, { x: pm.x - uy * side * 34 * k, y: pm.y + ux * side * 34 * k }, [txt], cable.color, k);
+      const center = rOff ? proj({ x: mid.x + rOff.x, y: mid.y + rOff.y })
+        : { x: pm.x - uy * side * 34 * k, y: pm.y + ux * side * 34 * k };
+      rRect = conduitCallout(g, pm, center, [txt], cable.color, k);
     } else {
-      pill(g, proj(mid), txt, cable.color, k);
+      const pos = rOff ? proj({ x: mid.x + rOff.x, y: mid.y + rOff.y }) : proj(mid);
+      rRect = pill(g, pos, txt, cable.color, k);
     }
+    if (opts.screen && rRect) conduitLabelHits.push({ ...rRect, key: rKey, midW: mid });
   });
 
   // ---- แนวเดินสายทางเลือก (เส้นประ ชั่วคราว) ----
@@ -1235,7 +1243,7 @@ function setMode(m) {
 }
 
 const HINTS = {
-  select: 'คลิกเพื่อเลือกจุด/เส้น · ลากจุดเพื่อย้าย · ลากป้ายท่อเพื่อจัดตำแหน่งป้าย · ลากพื้นที่ว่างเพื่อเลื่อนภาพ · ล้อเมาส์เพื่อซูม',
+  select: 'คลิกเพื่อเลือกจุด/เส้น · ลากจุดเพื่อย้าย · ลากป้ายท่อ/ป้ายระยะเพื่อจัดตำแหน่งป้าย · ลากพื้นที่ว่างเพื่อเลื่อนภาพ · ล้อเมาส์เพื่อซูม',
   calibrate: 'คลิกจุดที่ 1 และจุดที่ 2 บนแถบสเกลของภาพ แล้วกรอกระยะจริงในขั้นตอนที่ 2',
   'place-onu': 'คลิกตำแหน่งติดตั้ง FTTx ONU (ดาวแดง) · คลิกขวา/Esc เพื่อเลิกวาง',
   'place-dsw': 'คลิกตำแหน่งติดตั้ง Distribution Switch · คลิกขวา/Esc เพื่อเลิกวาง',
