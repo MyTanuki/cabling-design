@@ -418,7 +418,9 @@ function samePath(a, b) {
 
 // ทำช่วง "drop" ปลายเส้น (อุปกรณ์↔แนวท่อ) ที่เป็นเส้นทแยงให้เป็นแนวฉาก L
 // โดยแทรกจุดหักมุมให้ช่วงที่ติดกับแนวท่อวิ่งตามแกนของแนวท่อ (อุปกรณ์ที่อยู่นอก/เลยปลายแนว)
-function orthoDrops(pts) {
+// aOnWall/bOnWall: อุปกรณ์ปลายนั้นเกาะอยู่บนแนวท่อพอดี → ช่วงติดปลายคือ "แนวท่อ" เอง (อาจเอียง)
+// ไม่ใช่ช่วง drop จริง จึงห้ามดัดเป็นฉาก ไม่งั้นจะเกิดหนามย้อนกลับ/หลุดออกนอกแนวบนผนังเอียง
+function orthoDrops(pts, aOnWall, bOnWall) {
   if (!$('#chkOrtho').checked || pts.length < 3) return pts;
   const out = pts.map(p => ({ x: p.x, y: p.y }));
   const diag = (a, b) => Math.abs(a.x - b.x) > 1 && Math.abs(a.y - b.y) > 1;
@@ -428,8 +430,8 @@ function orthoDrops(pts) {
       ? { x: dev.x, y: con.y }   // แนวท่อแนวนอน → ออกจาก con ตามแนวนอนก่อน
       : { x: con.x, y: dev.y };  // แนวท่อแนวตั้ง → ออกจาก con ตามแนวตั้งก่อน
   const n = out.length;
-  if (diag(out[n - 2], out[n - 1])) out.splice(n - 1, 0, corner(out[n - 1], out[n - 2], out[n - 3]));
-  if (diag(out[0], out[1])) out.splice(1, 0, corner(out[0], out[1], out[2]));
+  if (!bOnWall && diag(out[n - 2], out[n - 1])) out.splice(n - 1, 0, corner(out[n - 1], out[n - 2], out[n - 3]));
+  if (!aOnWall && diag(out[0], out[1])) out.splice(1, 0, corner(out[0], out[1], out[2]));
   return out;
 }
 
@@ -553,7 +555,7 @@ function makeRouter(devs) {
       // ต่อตรงเฉพาะลิงก์สั้นมาก "และ" การเดินตามท่ออ้อมไกลกว่ามาก (ตู้เดียวกันที่อยู่ลึกจากแนวท่อ)
       // ไม่งั้นเดินตามแนวท่อเสมอ (กล้องใกล้ท่อ 3 ม. ก็ให้เลาะท่อ ไม่ต่อตรง)
       if (patch && keysLen(keys) > polyLenPx(patch) * PATCH_DETOUR) return patch;
-      return orthoDrops(keysPts(keys)); // ปกติ: เดินตามแนวท่อ (ทำช่วง drop ปลายให้เป็นแนวฉาก)
+      return orthoDrops(keysPts(keys), onWall(a), onWall(b)); // ปกติ: เดินตามแนวท่อ (ดัดช่วง drop ปลายให้ฉาก เว้นปลายที่เกาะบนแนว)
     },
     // เรียกหลังจาก path(a,b) ถูกใช้จริงแล้ว — กดต้นทุนช่วงที่เพิ่งเดินผ่านให้ถูกลง
     // เพื่อให้สายเส้นถัดไปเลือกใช้ท่อร่วมเดิมเมื่อเป็นไปได้ (ลดจำนวนท่อที่ต้องเดินแยก)
