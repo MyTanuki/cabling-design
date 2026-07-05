@@ -420,18 +420,29 @@ function samePath(a, b) {
 // โดยแทรกจุดหักมุมให้ช่วงที่ติดกับแนวท่อวิ่งตามแกนของแนวท่อ (อุปกรณ์ที่อยู่นอก/เลยปลายแนว)
 // aOnWall/bOnWall: อุปกรณ์ปลายนั้นเกาะอยู่บนแนวท่อพอดี → ช่วงติดปลายคือ "แนวท่อ" เอง (อาจเอียง)
 // ไม่ใช่ช่วง drop จริง จึงห้ามดัดเป็นฉาก ไม่งั้นจะเกิดหนามย้อนกลับ/หลุดออกนอกแนวบนผนังเอียง
+// นอกจากนี้ ถ้าช่วง drop "ตั้งฉากกับแนวท่ออยู่แล้ว" (จุดฉาย perpendicular กลางช่วง) ก็คงไว้
+// ตามหลัก: สายแตกจากแนวท่อไปหาอุปกรณ์ต้องเดินตั้งฉากกับแนวท่อ — ไม่ดัดเป็นฉากตามแกนจอ
 function orthoDrops(pts, aOnWall, bOnWall) {
   if (!$('#chkOrtho').checked || pts.length < 3) return pts;
   const out = pts.map(p => ({ x: p.x, y: p.y }));
   const diag = (a, b) => Math.abs(a.x - b.x) > 1 && Math.abs(a.y - b.y) > 1;
+  // ช่วง drop (dropA→dropB) ตั้งฉากกับแนวท่อ (condA→condB) หรือไม่ (|cos| ≈ 0)
+  const perp = (dropA, dropB, condA, condB) => {
+    const ux = dropB.x - dropA.x, uy = dropB.y - dropA.y;
+    const vx = condB.x - condA.x, vy = condB.y - condA.y;
+    const m = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+    return m > 0 && Math.abs(ux * vx + uy * vy) / m < 0.06;
+  };
   // corner ให้ช่วง con→corner วิ่งตามแกนแนวท่อที่ con (อ้างทิศจากจุดถัดไป ref)
   const corner = (dev, con, ref) =>
     (Math.abs(con.x - ref.x) >= Math.abs(con.y - ref.y))
       ? { x: dev.x, y: con.y }   // แนวท่อแนวนอน → ออกจาก con ตามแนวนอนก่อน
       : { x: con.x, y: dev.y };  // แนวท่อแนวตั้ง → ออกจาก con ตามแนวตั้งก่อน
   const n = out.length;
-  if (!bOnWall && diag(out[n - 2], out[n - 1])) out.splice(n - 1, 0, corner(out[n - 1], out[n - 2], out[n - 3]));
-  if (!aOnWall && diag(out[0], out[1])) out.splice(1, 0, corner(out[0], out[1], out[2]));
+  if (!bOnWall && diag(out[n - 2], out[n - 1]) && !perp(out[n - 2], out[n - 1], out[n - 3], out[n - 2]))
+    out.splice(n - 1, 0, corner(out[n - 1], out[n - 2], out[n - 3]));
+  if (!aOnWall && diag(out[0], out[1]) && !perp(out[1], out[0], out[1], out[2]))
+    out.splice(1, 0, corner(out[0], out[1], out[2]));
   return out;
 }
 
