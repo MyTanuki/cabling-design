@@ -67,5 +67,20 @@ npx --yes http-server -p 5179 -c-1 .
 
 ## ไฟล์
 
-- `index.html` / `styles.css` / `app.js` — ตัวแอปทั้งหมด (vanilla JS, ไม่มี dependency)
+- `index.html` / `styles.css` / `app.js` — ตัวแอปทั้งหมด (vanilla JS, ไม่มี dependency; `app.js` โหลดเป็น ES module)
+- `router.js` — **ตัวหาเส้นทางเดินสาย/ท่อแบบใช้ซ้ำได้** (graph + Dijkstra + เรขาคณิต) โมดูลอิสระ ไม่พึ่ง state/DOM
+  รับ `segs` (ช่วงแนวท่อ), `devs` (จุดอุปกรณ์), `{ pxPerM, ortho }` เป็นพารามิเตอร์ → ยกไปใช้ในโครงการอื่นได้
 - `picture.jpg` — ภาพถ่ายดาวเทียมตัวอย่างของสถานที่ (มีแถบสเกล 100 ม. มุมล่างขวา)
+
+### นำ `router.js` ไปใช้ในโครงการอื่น
+
+```js
+import { createRouter } from './router.js';
+// แปลงเส้นขอบ/แนวท่อของคุณเป็นช่วงย่อย [[{x,y},{x,y}], …]
+const segs = walls.flatMap(w => w.points.slice(1).map((p, i) => [w.points[i], p]));
+const router = createRouter(segs, devicePoints, { pxPerM: 2, ortho: true });
+const pts = router.path(a, b);   // {x,y}[] เดินตามแนวท่อ (ตั้งฉากเข้าอุปกรณ์) หรือ null ถ้าเดินตามแนวไม่ได้
+const d   = router.dist(a, b);   // ระยะจริงบนแนวท่อ (Infinity ถ้าต่อไม่ถึง)
+router.commit(a, b);             // (ทางเลือก) ให้สายเส้นถัดไปเลือกเดินร่วมท่อเดิม
+const alt = router.alts(a, b, 3);// แนวเดินสายทางเลือก (สูงสุด 3)
+```
