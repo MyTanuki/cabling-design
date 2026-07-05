@@ -433,11 +433,15 @@ function orthoDrops(pts, aOnWall, bOnWall) {
     const m = Math.hypot(ux, uy) * Math.hypot(vx, vy);
     return m > 0 && Math.abs(ux * vx + uy * vy) / m < 0.06;
   };
-  // corner ให้ช่วง con→corner วิ่งตามแกนแนวท่อที่ con (อ้างทิศจากจุดถัดไป ref)
-  const corner = (dev, con, ref) =>
-    (Math.abs(con.x - ref.x) >= Math.abs(con.y - ref.y))
-      ? { x: dev.x, y: con.y }   // แนวท่อแนวนอน → ออกจาก con ตามแนวนอนก่อน
-      : { x: con.x, y: dev.y };  // แนวท่อแนวตั้ง → ออกจาก con ตามแนวตั้งก่อน
+  // corner: เดินจาก con ไป "ตามแนวท่อ" (ทิศ ref→con) จนถึงจุดที่ตั้งฉากกับอุปกรณ์ แล้วค่อย drop
+  // ตั้งฉากกับแนวท่อจริง (ไม่ใช่แกนจอ) → ใช้ได้กับท่อเอียงด้วย · ท่อตั้งฉากแกนจะได้ผลเท่าเดิม
+  const corner = (dev, con, ref) => {
+    const ux = con.x - ref.x, uy = con.y - ref.y; // ทิศแนวท่อที่ con
+    const L2 = ux * ux + uy * uy;
+    if (!L2) return { x: con.x, y: con.y };
+    const s = ((dev.x - con.x) * ux + (dev.y - con.y) * uy) / L2; // ฉายระยะ dev ลงแกนแนวท่อ
+    return { x: con.x + ux * s, y: con.y + uy * s };
+  };
   const n = out.length;
   if (!bOnWall && diag(out[n - 2], out[n - 1]) && !perp(out[n - 2], out[n - 1], out[n - 3], out[n - 2]))
     out.splice(n - 1, 0, corner(out[n - 1], out[n - 2], out[n - 3]));
