@@ -390,6 +390,23 @@ function samePath(a, b) {
   return a.every((p, i) => dist(p, b[i]) < 1);
 }
 
+// ทำช่วง "drop" ปลายเส้น (อุปกรณ์↔แนวท่อ) ที่เป็นเส้นทแยงให้เป็นแนวฉาก L
+// โดยแทรกจุดหักมุมให้ช่วงที่ติดกับแนวท่อวิ่งตามแกนของแนวท่อ (อุปกรณ์ที่อยู่นอก/เลยปลายแนว)
+function orthoDrops(pts) {
+  if (!$('#chkOrtho').checked || pts.length < 3) return pts;
+  const out = pts.map(p => ({ x: p.x, y: p.y }));
+  const diag = (a, b) => Math.abs(a.x - b.x) > 1 && Math.abs(a.y - b.y) > 1;
+  // corner ให้ช่วง con→corner วิ่งตามแกนแนวท่อที่ con (อ้างทิศจากจุดถัดไป ref)
+  const corner = (dev, con, ref) =>
+    (Math.abs(con.x - ref.x) >= Math.abs(con.y - ref.y))
+      ? { x: dev.x, y: con.y }   // แนวท่อแนวนอน → ออกจาก con ตามแนวนอนก่อน
+      : { x: con.x, y: dev.y };  // แนวท่อแนวตั้ง → ออกจาก con ตามแนวตั้งก่อน
+  const n = out.length;
+  if (diag(out[n - 2], out[n - 1])) out.splice(n - 1, 0, corner(out[n - 1], out[n - 2], out[n - 3]));
+  if (diag(out[0], out[1])) out.splice(1, 0, corner(out[0], out[1], out[2]));
+  return out;
+}
+
 /* สร้างตัวหาเส้นทาง: กราฟจากเส้นขอบอาคารทั้งหมด + จุดอุปกรณ์เชื่อมเข้าได้หลายเส้นใกล้เคียง
    (ให้ Dijkstra เลือกทางเข้า-ออกที่ทำให้เส้นรวมสั้นที่สุด)
    ถ้าไม่มีขอบอาคาร → เส้นตรงหักมุมฉาก (Manhattan) */
@@ -446,6 +463,8 @@ function makeRouter(devs) {
     }
   });
   drops.forEach(([d, pr]) => edge(d, pr));
+  // โหนดตำแหน่งอุปกรณ์ — ใช้เป็นต้นทาง/ปลายทางเท่านั้น ห้ามเดินสายทะลุผ่าน (กันสายอ้อมผ่านกล้องอื่น)
+  const deviceKeys = new Set(devs.map(keyOf));
 
   const cache = new Map();
   const edgeKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
@@ -462,6 +481,7 @@ function makeRouter(devs) {
       pq.sort((a, b) => a[0] - b[0]);
       const [dc, k] = pq.shift();
       if (dc > (distM.has(k) ? distM.get(k) : Infinity)) continue;
+      if (deviceKeys.has(k) && k !== srcK) continue; // ไม่ขยายต่อจากโหนดอุปกรณ์อื่น = ห้ามเดินทะลุ
       for (const [nk, w] of adj.get(k).e) {
         const nd = dc + (penal ? w * (penal.get(edgeKey(k, nk)) || 1) : w);
         if (nd < (distM.has(nk) ? distM.get(nk) : Infinity)) {
@@ -500,7 +520,7 @@ function makeRouter(devs) {
       const keys = rawPath(ka, kb, reuseBias.size ? reuseBias : null);
       if (!keys) return branch; // กราฟไม่ต่อถึงกัน — ยอมให้เฉพาะระยะ branch
       if (patch && polyLenPx(patch) < keysLen(keys)) return patch; // เฉพาะลิงก์สั้นมากเท่านั้นที่ต่อตรง
-      return keysPts(keys); // ปกติ: เดินตามแนวท่อ
+      return orthoDrops(keysPts(keys)); // ปกติ: เดินตามแนวท่อ (ทำช่วง drop ปลายให้เป็นแนวฉาก)
     },
     // เรียกหลังจาก path(a,b) ถูกใช้จริงแล้ว — กดต้นทุนช่วงที่เพิ่งเดินผ่านให้ถูกลง
     // เพื่อให้สายเส้นถัดไปเลือกใช้ท่อร่วมเดิมเมื่อเป็นไปได้ (ลดจำนวนท่อที่ต้องเดินแยก)
