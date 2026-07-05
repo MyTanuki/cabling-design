@@ -436,12 +436,15 @@ function makeRouter(devs) {
     }
   const branchPx = (state.pxPerM ? BRANCH_MAX_M * state.pxPerM : 30) + 0.5; // +epsilon กันปัดเศษ
   const patchPx = (state.pxPerM ? PATCH_MAX_M * state.pxPerM : 12) + 0.5;   // ระยะ "ต่อตรง" สำหรับลิงก์สั้นมาก
-  // อุปกรณ์เชื่อมเข้าขอบอาคารได้หลายเส้น (สูงสุด 4 เส้นที่ระยะใกล้เคียงกับเส้นที่ใกล้สุด)
+  // อุปกรณ์เชื่อมเข้าแนวท่อ "จุดฉายตั้งฉากบนตัวช่วง" ที่ใกล้ที่สุด (ตามกติกา: นอกแนว→เข้าหาจุดใกล้สุด)
+  // ใช้เฉพาะจุดที่ฉากตกบนช่วง (0<t<1) เพื่อได้เส้น drop ตั้งฉากสะอาด ไม่ใช่เส้นทแยงไปมุม/ปลายท่อ
   const drops = [];
   devs.forEach(d => {
     const projs = segs.map((s, i) => ({ i, ...projToSeg(d, s[0], s[1]) })).sort((x, y) => x.d - y.d);
     const lim = projs[0].d * 1.8 + (state.pxPerM ? 10 * state.pxPerM : 30);
-    projs.filter(p => p.d <= lim).slice(0, 4).forEach(p => {
+    const perp = projs.filter(p => p.t > 1e-3 && p.t < 1 - 1e-3 && p.d <= lim).slice(0, 4);
+    const chosen = perp.length ? perp : projs.slice(0, 1); // ไม่มีจุดตั้งฉากเลย (เลยปลายท่อ) → ใช้จุดใกล้สุด
+    chosen.forEach(p => {
       splits[p.i].push(p.t);
       drops.push([d, p.proj]);
     });
