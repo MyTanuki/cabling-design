@@ -70,6 +70,7 @@ const state = {
   altView: null,             // {routeId, options:[{points}]} — แนวเดินสายทางเลือก (ชั่วคราว)
   conduitLabelOffsets: {},   // key ช่วงท่อ → {x,y} offset โลก ของป้ายที่ผู้ใช้ลากย้าย
   selected: null,            // {kind:'device'|'route', id}
+  multiSel: [],              // [{kind,id}] — เลือกหลายรายการจากลากกรอบ (marquee) เพื่อลบ
   hoverW: null,              // world coords of pointer
   nextId: 1,
   projectName: null,         // ชื่อโครงการที่กำลังทำงาน (สำหรับบันทึก/เปิดหลายโครงการ)
@@ -80,7 +81,14 @@ let dragVertex = null;       // {wall, index} — กำลังลากปล
 let dragLabel = null;        // {key, midW, gdx, gdy} — กำลังลากป้ายท่อ
 let conduitLabelHits = [];   // กรอบป้ายท่อบนจอจากการวาดรอบล่าสุด (สำหรับ hit-test)
 let lastScr = null;          // ตำแหน่งเมาส์บนจอล่าสุด (สำหรับ edge auto-pan)
+let marquee = null;          // {x0,y0,x1,y1} กรอบลากเลือกกลุ่ม (พิกัดจอ)
 const autoPan = { vx: 0, vy: 0, raf: null };
+
+// รายการนี้ถูกเลือกอยู่ไหม (เลือกเดี่ยว หรืออยู่ในกลุ่มที่ลากกรอบเลือก)
+function isSelected(kind, id) {
+  if (state.selected && state.selected.kind === kind && state.selected.id === id) return true;
+  return state.multiSel.some(s => s.kind === kind && s.id === id);
+}
 
 /* ============================================================
    coordinate helpers
@@ -877,6 +885,29 @@ function draw() {
 
   drawScene(ctx, w2s, 1, { screen: true });
   drawLegend(ctx, 12, 12, 1);
+  if (marquee) drawMarquee(ctx);
+}
+
+function drawMarquee(g) {
+  const x = Math.min(marquee.x0, marquee.x1), y = Math.min(marquee.y0, marquee.y1);
+  const w = Math.abs(marquee.x1 - marquee.x0), h = Math.abs(marquee.y1 - marquee.y0);
+  g.save();
+  g.fillStyle = 'rgba(56,189,248,.14)';
+  g.fillRect(x, y, w, h);
+  g.strokeStyle = '#38bdf8'; g.lineWidth = 1.5; g.setLineDash([5, 4]);
+  g.strokeRect(x, y, w, h);
+  g.restore();
+}
+// รายการ object ที่อยู่ในกรอบ marquee (อุปกรณ์=จุดกลางในกรอบ · เส้น/ท่อ=มีจุดใดจุดหนึ่งในกรอบ)
+function objectsInMarquee(mq) {
+  const x0 = Math.min(mq.x0, mq.x1), x1 = Math.max(mq.x0, mq.x1);
+  const y0 = Math.min(mq.y0, mq.y1), y1 = Math.max(mq.y0, mq.y1);
+  const inRect = p => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
+  const sel = [];
+  state.devices.forEach(d => { if (inRect(w2s(d))) sel.push({ kind: 'device', id: d.id }); });
+  state.routes.forEach(r => { if (r.points.some(p => inRect(w2s(p)))) sel.push({ kind: 'route', id: r.id }); });
+  state.walls.forEach(w => { if (w.points.some(p => inRect(w2s(p)))) sel.push({ kind: 'wall', id: w.id }); });
+  return sel;
 }
 
 /* วาด overlay ทั้งหมด — ใช้ร่วมกันทั้งบนจอและตอน export
@@ -903,7 +934,7 @@ function drawScene(g, proj, k, opts = {}) {
   // เส้นไหนยังไม่เชื่อมกับเครือข่ายหลัก — ถ้าเชื่อมเป็นกลุ่มเดียวหมดจะได้สีฟ้าเดิมทุกเส้น (ไม่มีอะไรเปลี่ยน)
   const wallCompMap = state.walls.length > 1 ? wallComponentMap() : null;
   for (const wl of state.walls) {
-    const sel = state.selected && state.selected.kind === 'wall' && state.selected.id === wl.id;
+    const sel = isSelected('wall', wl.id);
     const color = wallCompMap ? WALL_GROUP_COLORS[wallCompMap.get(wl.id) % WALL_GROUP_COLORS.length] : null;
     const dangle = [isDanglingEnd(wl, wl.points[0]), isDanglingEnd(wl, wl.points[wl.points.length - 1])];
     drawWall(g, wl.points.map(proj), k, sel, color, dangle);
@@ -949,7 +980,7 @@ function drawScene(g, proj, k, opts = {}) {
   // ---- routes ----
   state.routes.forEach((r, ri) => {
     const cable = CABLES[effCable(r)];
-    const sel = state.selected && state.selected.kind === 'route' && state.selected.id === r.id;
+    const sel = isSelected('route', r.id);
     // ลิงก์ไร้สายวาดเป็นเส้นประ (ไม่ใช่แนวเดินสายจริง)
     strokePoly(g, r.points.map(proj), cable.color, sel ? 6 * k : 4 * k, k, sel, cable.wireless ? [10 * k, 7 * k] : null);
     // ป้ายระยะที่กึ่งกลางเส้น — โหมด "กรอบชี้เส้น" ใช้กรอบชี้แบบเดียวกับป้ายท่อ ไม่ทับบนเส้น
@@ -1010,7 +1041,7 @@ function drawScene(g, proj, k, opts = {}) {
   // ---- devices ----
   for (const d of state.devices) {
     const p = proj(d);
-    const sel = state.selected && state.selected.kind === 'device' && state.selected.id === d.id;
+    const sel = isSelected('device', d.id);
     drawDevice(g, d, p, k, sel);
   }
 }
@@ -1429,7 +1460,7 @@ function setMode(m) {
 }
 
 const HINTS = {
-  select: 'คลิกเพื่อเลือกจุด/เส้น · ลากอุปกรณ์/ปลายท่อเพื่อย้าย · ลากป้ายเพื่อจัดตำแหน่ง · ลากพื้นที่ว่างเพื่อเลื่อนภาพ · ล้อเมาส์เพื่อซูม',
+  select: 'คลิกเลือกจุด/เส้น · ลากอุปกรณ์/ปลายท่อเพื่อย้าย · ลากพื้นที่ว่าง = ลากกรอบเลือกหลายรายการ (Delete = ลบ) · เมาส์กลางลากเลื่อนภาพ · ล้อเมาส์ซูม',
   calibrate: 'คลิกจุดที่ 1 และจุดที่ 2 บนแถบสเกลของภาพ แล้วกรอกระยะจริงในขั้นตอนที่ 2',
   'place-onu': 'คลิกตำแหน่งติดตั้ง FTTx ONU (ดาวแดง) · คลิกขวา/Esc เพื่อเลิกวาง',
   'place-dsw': 'คลิกตำแหน่งติดตั้ง Distribution Switch · คลิกขวา/Esc เพื่อเลิกวาง',
@@ -1492,8 +1523,9 @@ canvas.addEventListener('mousedown', e => {
     const v = hitWallVertex(scr); // จับปลาย/จุดหักของแนวท่อเพื่อลากย้าย
     if (v) { dragVertex = v; return; }
   }
-  if (e.button === 1 || (e.button === 0 && state.mode === 'select' && !hitDevice(scr) && !hitRoute(scr) && !hitWall(scr))) {
-    panning = true;
+  if (e.button === 1) { panning = true; e.preventDefault(); return; } // เมาส์กลาง = เลื่อนภาพ
+  if (e.button === 0 && state.mode === 'select' && !hitDevice(scr) && !hitRoute(scr) && !hitWall(scr)) {
+    marquee = { x0: scr.x, y0: scr.y, x1: scr.x, y1: scr.y }; // ลากพื้นที่ว่าง = ลากกรอบเลือกกลุ่ม
     e.preventDefault();
     return;
   }
@@ -1523,6 +1555,8 @@ canvas.addEventListener('mousemove', e => {
   } else if (dragLabel && moved) {
     const c = s2w({ x: scr.x + dragLabel.gdx, y: scr.y + dragLabel.gdy });
     state.conduitLabelOffsets[dragLabel.key] = { x: c.x - dragLabel.midW.x, y: c.y - dragLabel.midW.y };
+  } else if (marquee) {
+    marquee.x1 = scr.x; marquee.y1 = scr.y;
   }
   // เปลี่ยนเคอร์เซอร์เมื่อชี้ปลาย/จุดหักของแนวท่อ (บอกว่าลากได้)
   if (state.mode === 'select' && !dragVertex && !dragDev)
@@ -1563,8 +1597,18 @@ canvas.addEventListener('mouseup', e => {
   const wasClick = !moved;
   const draggedDev = (dragDev && moved) ? dragDev : null;
   const clickedLabel = (dragLabel && !moved) ? dragLabel : null; // จับป้ายแล้วปล่อยโดยไม่ลาก = คลิกป้าย
+  const didMarquee = (marquee && moved) ? marquee : null;
   const wasDrag = draggedDev || (dragLabel && moved) || (dragVertex && moved);
-  panning = false; dragDev = null; dragLabel = null; dragVertex = null; downScr = null;
+  panning = false; dragDev = null; dragLabel = null; dragVertex = null; marquee = null; downScr = null;
+  if (didMarquee) { // ลากกรอบเลือกกลุ่ม → เลือกทุก object ในกรอบ
+    state.multiSel = objectsInMarquee(didMarquee);
+    state.selected = null;
+    refresh();
+    $('#statusHint').textContent = state.multiSel.length
+      ? `เลือก ${state.multiSel.length} รายการ — กด Delete หรือ "✖ ลบที่เลือก" เพื่อลบทั้งหมด`
+      : 'ไม่มี object ในกรอบที่ลาก';
+    return;
+  }
   if (wasDrag) {
     if (draggedDev) rerouteAutoForDevice(draggedDev);
     refresh();
@@ -1616,10 +1660,11 @@ window.addEventListener('keydown', e => {
     if (state.altView) clearAlts();
     else if (state.wallDraft) commitWall();
     else if (state.draft) { state.draft = null; updateHint(); draw(); }
+    else if (state.multiSel.length || state.selected) { state.multiSel = []; state.selected = null; refresh(); }
     else setMode('select');
   }
   if (e.key === 'Enter' && state.wallDraft) commitWall();
-  if ((e.key === 'Delete' || e.key === 'Backspace') && state.selected) deleteSelected();
+  if ((e.key === 'Delete' || e.key === 'Backspace') && (state.selected || state.multiSel.length)) deleteSelected();
   if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); }
 });
 
@@ -1709,6 +1754,7 @@ function handleClick(scr) {
       const r = d ? null : hitRoute(scr);
       const wl = (d || r) ? null : hitWall(scr);
       if (!d && !r && !wl && state.altView) state.altView = null; // คลิกพื้นที่ว่าง = ปิดทางเลือก
+      state.multiSel = []; // คลิกเดี่ยว = ยกเลิกการเลือกกลุ่ม
       state.selected = d ? { kind: 'device', id: d.id }
         : r ? { kind: 'route', id: r.id }
         : wl ? { kind: 'wall', id: wl.id } : null;
@@ -1720,6 +1766,16 @@ function handleClick(scr) {
 }
 
 function deleteSelected() {
+  if (state.multiSel.length) { // ลบกลุ่มที่ลากกรอบเลือก
+    const devIds = new Set(), rIds = new Set(), wIds = new Set();
+    state.multiSel.forEach(s => (s.kind === 'device' ? devIds : s.kind === 'wall' ? wIds : rIds).add(s.id));
+    state.devices = state.devices.filter(d => !devIds.has(d.id));
+    state.routes = state.routes.filter(r => !rIds.has(r.id) && !devIds.has(r.fromId) && !devIds.has(r.toId));
+    state.walls = state.walls.filter(w => !wIds.has(w.id));
+    state.multiSel = []; state.selected = null;
+    refresh();
+    return;
+  }
   if (!state.selected) return;
   if (state.selected.kind === 'device') {
     const id = state.selected.id;
@@ -1899,8 +1955,7 @@ function renderTable() {
     const notes = routeNotes(r);
     const tr = document.createElement('tr');
     tr.dataset.rid = r.id;
-    if (state.selected && state.selected.kind === 'route' && state.selected.id === r.id)
-      tr.classList.add('selected');
+    if (isSelected('route', r.id)) tr.classList.add('selected');
     tr.innerHTML = `
       <td class="drag-handle" draggable="true" title="ลากเพื่อจัดลำดับรายการ">⠿ ${i + 1}</td>
       <td>${routeLabel(r)}${notes.map(n => `<span class="route-note">⚠ ${n}</span>`).join('')}</td>
