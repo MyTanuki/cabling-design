@@ -161,6 +161,7 @@ tr.selected td { background: #0c4a6e; }
 .cable-tag.cat6 { background: #f59e0b22; color: var(--cat6); border: 1px solid var(--cat6); }
 .cable-tag.fiber { background: #ef444422; color: var(--fiber); border: 1px solid var(--fiber); }
 .cable-tag.wireless { background: #a855f722; color: #c084fc; border: 1px solid #a855f7; }
+.topo-wrap { overflow-x: auto; margin: 6px 0; }
 .route-note { font-size: 10.5px; color: #fbbf24; display: block; margin-top: 2px; }
 td select {
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);

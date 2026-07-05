@@ -17,6 +17,7 @@
       </div>
     </div>
     <div class="top-actions">
+      <button id="btnUndo" class="btn" title="ย้อนกลับ (Ctrl+Z · สูงสุด 5 ก้าว)" disabled>↶ ย้อนกลับ</button>
       <button id="btnExportPng" class="btn" title="บันทึกภาพแบบแปลนพร้อมแนวเดินสายเป็น PNG">🖼️ Export PNG</button>
       <button id="btnPrint" class="btn" title="พิมพ์รายงานการออกแบบ">🖨️ พิมพ์รายงาน</button>
       <button id="btnClear" class="btn danger" title="ล้างการออกแบบทั้งหมด">🗑️ ล้างทั้งหมด</button>
@@ -77,6 +78,21 @@
     </section>
 
     <aside id="sidebar">
+      <details class="step" id="stepProject" open>
+        <summary><span class="stepno">💾</span> โครงการ (Projects)</summary>
+        <div class="step-body">
+          <p class="muted">บันทึกงานปัจจุบันเป็นโครงการ เพื่อเรียกใช้ภายหลัง หรือสลับหลายโครงการ</p>
+          <div class="row">
+            <select id="selProject" title="เลือกโครงการที่บันทึกไว้"><option value="">— ยังไม่มีโครงการที่บันทึก —</option></select>
+          </div>
+          <div class="row">
+            <button id="btnSaveProject" class="btn primary" title="บันทึกงานปัจจุบันเป็นโครงการใหม่/ทับชื่อเดิม">💾 บันทึกเป็น…</button>
+            <button id="btnOpenProject" class="btn" title="เปิดโครงการที่เลือก" disabled>📂 เปิด</button>
+            <button id="btnDeleteProject" class="btn danger" title="ลบโครงการที่เลือก" disabled>🗑️ ลบ</button>
+          </div>
+        </div>
+      </details>
+
       <details class="step" id="step1" open>
         <summary><span class="stepno">1</span> อัปโหลดภาพสถานที่</summary>
         <div class="step-body">
@@ -160,6 +176,8 @@
           </div>
           <p id="tblNote" class="muted"></p>
           <div id="altBox"></div>
+          <h3>แผนผังโครงข่าย (Topology) — อัปเดตเรียลไทม์</h3>
+          <div id="topoBox" class="topo-wrap"></div>
           <h3>ท่อร้อยสายและอุปกรณ์ประกอบ</h3>
           <div id="conduitBox"></div>
           <h3>สรุปอุปกรณ์ (Hikvision)</h3>

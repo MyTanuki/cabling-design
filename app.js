@@ -70,6 +70,7 @@ const state = {
   selected: null,            // {kind:'device'|'route', id}
   hoverW: null,              // world coords of pointer
   nextId: 1,
+  projectName: null,         // ชื่อโครงการที่กำลังทำงาน (สำหรับบันทึก/เปิดหลายโครงการ)
 };
 
 let panning = false, dragDev = null, downScr = null, moved = false;
@@ -1442,6 +1443,7 @@ window.addEventListener('keydown', e => {
   }
   if (e.key === 'Enter' && state.wallDraft) commitWall();
   if ((e.key === 'Delete' || e.key === 'Backspace') && state.selected) deleteSelected();
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); }
 });
 
 function commitWall() {
@@ -1644,6 +1646,49 @@ function refresh() {
   renderWarnings();
   renderDevSummary();
   saveLocal();
+  captureUndo();
+}
+
+/* ============================================================
+   undo — เก็บสถานะย้อนหลังสูงสุด 5 ก้าว (Ctrl+Z)
+   ============================================================ */
+const UNDO_MAX = 5;
+let undoStack = [];
+let undoPrev = null;      // snapshot ของสถานะที่ settle ล่าสุด
+let undoRestoring = false;
+function designSnapshot() {
+  return JSON.stringify({
+    devices: state.devices, routes: state.routes, walls: state.walls,
+    pxPerM: state.pxPerM, cal: state.cal, nextId: state.nextId,
+    conduitLabelOffsets: state.conduitLabelOffsets,
+  });
+}
+function captureUndo() {
+  const snap = designSnapshot();
+  if (undoRestoring) { undoPrev = snap; return; } // ตอน restore ไม่เก็บซ้ำ
+  if (undoPrev !== null && snap !== undoPrev) {
+    undoStack.push(undoPrev);
+    if (undoStack.length > UNDO_MAX) undoStack.shift();
+  }
+  undoPrev = snap;
+  updateUndoBtn();
+}
+function resetUndo() { undoStack = []; undoPrev = designSnapshot(); updateUndoBtn(); }
+function updateUndoBtn() { const b = $('#btnUndo'); if (b) b.disabled = undoStack.length === 0; }
+function undo() {
+  if (!undoStack.length) return;
+  const d = JSON.parse(undoStack.pop());
+  undoRestoring = true;
+  Object.assign(state, {
+    devices: d.devices, routes: d.routes, walls: d.walls,
+    pxPerM: d.pxPerM, cal: d.cal, nextId: d.nextId,
+    conduitLabelOffsets: d.conduitLabelOffsets || {},
+    selected: null, draft: null, wallDraft: null, altView: null,
+  });
+  refresh();
+  undoRestoring = false;
+  updateUndoBtn();
+  $('#statusHint').textContent = `ย้อนกลับแล้ว · เหลือย้อนได้อีก ${undoStack.length} ก้าว`;
 }
 
 function renderScaleUI() {
@@ -1835,7 +1880,71 @@ function renderEquipment() {
   }</tbody></table>`;
   $('#equipBox').innerHTML = html;
   $('#conduitBox').innerHTML = conduitHTML();
+  $('#topoBox').innerHTML = topologyHTML(false);   // แผนผังโครงข่ายอัปเดตแบบเรียลไทม์
   $('#recoBox').innerHTML = recommendationsHTML();
+}
+
+/* ============================================================
+   แผนผังโครงข่ายเชิงตรรกะ (topology) — สร้างจากการเชื่อมต่อจริง อัปเดตเรียลไทม์
+   ============================================================ */
+const TOPO_TIER = { onu: 0, dsw: 1, psw: 2, wap: 3, cam: 4 };
+function buildTopology() {
+  const adj = new Map();
+  state.devices.forEach(d => adj.set(d.id, []));
+  state.routes.forEach(r => {
+    if (adj.has(r.fromId) && adj.has(r.toId)) {
+      adj.get(r.fromId).push({ id: r.toId, route: r });
+      adj.get(r.toId).push({ id: r.fromId, route: r });
+    }
+  });
+  const visited = new Set();
+  const tier = d => (d && TOPO_TIER[d.type] != null ? TOPO_TIER[d.type] : 5);
+  const build = (id, route) => {
+    visited.add(id);
+    const node = { dev: deviceById(id), route, children: [] };
+    adj.get(id).filter(n => !visited.has(n.id))
+      .sort((a, b) => tier(deviceById(a.id)) - tier(deviceById(b.id)))
+      .forEach(n => { if (!visited.has(n.id)) node.children.push(build(n.id, n.route)); });
+    return node;
+  };
+  const roots = [];
+  [...state.devices].sort((a, b) => tier(a) - tier(b)).forEach(d => {
+    if (!visited.has(d.id)) roots.push(build(d.id, null));
+  });
+  return roots;
+}
+function topologyHTML(forReport) {
+  const roots = buildTopology();
+  if (!state.devices.length)
+    return '<p class="muted">ยังไม่มีอุปกรณ์ — วางอุปกรณ์แล้วลากแนวสายเพื่อสร้างแผนผังโครงข่าย</p>';
+  let leaf = 0, maxDepth = 0;
+  const dx = 148, dy = 24;
+  const place = (node, depth) => {
+    maxDepth = Math.max(maxDepth, depth);
+    node.x = depth * dx + 16;
+    if (!node.children.length) node.y = (leaf++) * dy + 16;
+    else { node.children.forEach(c => place(c, depth + 1)); node.y = (node.children[0].y + node.children[node.children.length - 1].y) / 2; }
+  };
+  roots.forEach(r => place(r, 0));
+  const W = (maxDepth + 1) * dx + 40, H = Math.max(leaf, 1) * dy + 20;
+  const textFill = forReport ? '#1e293b' : '#e2e8f0';
+  const bg = forReport ? '#fff' : 'rgba(15,23,42,.5)';
+  const parts = [];
+  const walk = node => {
+    node.children.forEach(c => {
+      const cable = c.route ? CABLES[effCable(c.route)] : null;
+      const color = cable ? cable.color : '#64748b';
+      const dash = cable && cable.wireless ? ' stroke-dasharray="5 4"' : '';
+      const mx = (node.x + c.x) / 2;
+      parts.push(`<path d="M${node.x + 6} ${node.y} H${mx} V${c.y} H${c.x - 6}" fill="none" stroke="${color}" stroke-width="1.6"${dash}/>`);
+      walk(c);
+    });
+    const col = DEV[node.dev.type] ? DEV[node.dev.type].color : '#94a3b8';
+    parts.push(`<circle cx="${node.x}" cy="${node.y}" r="5" fill="${col}" stroke="#fff" stroke-width="1"/>`);
+    parts.push(`<text x="${node.x + 9}" y="${node.y + 3.5}" font-size="10.5" fill="${textFill}" font-family="Segoe UI, sans-serif">${node.dev.label}</text>`);
+  };
+  roots.forEach(walk);
+  return `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:100%;background:${bg};border-radius:8px" xmlns="http://www.w3.org/2000/svg">${parts.join('')}</svg>`;
 }
 
 /* ---------- สรุปท่อร้อยสาย + อุปกรณ์ประกอบ แยกตามสภาพแวดล้อมและขนาดท่อจริง ---------- */
@@ -2005,6 +2114,11 @@ function renderExportCanvas() {
   return off;
 }
 
+$('#btnUndo').addEventListener('click', undo);
+$('#btnSaveProject').addEventListener('click', saveProjectAs);
+$('#btnOpenProject').addEventListener('click', openProject);
+$('#btnDeleteProject').addEventListener('click', deleteProject);
+
 $('#btnExportPng').addEventListener('click', () => {
   const off = renderExportCanvas();
   if (!off) { alert('ยังไม่มีภาพ'); return; }
@@ -2044,21 +2158,24 @@ function buildReport() {
     <h2>1. แบบแปลนแนวเดินสาย</h2>
     ${off ? `<img class="plan" src="${off.toDataURL('image/jpeg', 0.92)}">` : ''}
     <p>เส้นสีเหลือง = LAN CAT6 (≤ ${CAT6_MAX} ม.) · เส้นสีแดง = Fiber Optic (&gt; ${CAT6_MAX} ม.) · มาตราส่วน ${state.pxPerM ? state.pxPerM.toFixed(2) + ' px/ม.' : '—'}</p>
-    <h2>2. ตารางการเชื่อมต่อจุดต่อจุด</h2>
+    <h2>2. แผนผังโครงข่ายเชิงตรรกะ (Topology)</h2>
+    <p>ลำดับการเชื่อมต่อ FTTx ONU → Distribution SW → PoE SW → กล้อง/Wireless AP (เส้นประม่วง = ลิงก์ไร้สาย) · สร้างจากการเชื่อมต่อจริงในแบบ</p>
+    <div>${topologyHTML(true)}</div>
+    <h2>3. ตารางการเชื่อมต่อจุดต่อจุด</h2>
     <table>
       <thead><tr><th>#</th><th>เส้นทาง</th><th>ประเภทสาย</th><th>ระยะตามแบบ (ม.)</th><th>ความยาวสั่งซื้อ (ม.)</th><th>ท่อร้อยสาย</th><th>หมายเหตุ</th></tr></thead>
       <tbody>${routeRows || '<tr><td colspan="7">—</td></tr>'}</tbody>
     </table>
     <p>ความยาวสั่งซื้อ = ระยะตามแบบ ×${SLACK_FACTOR.toFixed(2)} + เผื่อปลายทาง ${SLACK_ENDS} ม. · ขนาดท่อคิดที่ fill ratio ≤ 40% (สาย 1 เส้น/ท่อ)</p>
-    <h2>3. ท่อร้อยสายและอุปกรณ์ประกอบการติดตั้ง</h2>
+    <h2>4. ท่อร้อยสายและอุปกรณ์ประกอบการติดตั้ง</h2>
     <p>เกณฑ์เลือกชนิดท่อ: ภายในอาคาร/ในร่มใช้ <strong>EMT</strong> · ภายนอกอาคาร (กันน้ำ/ทน UV) ใช้ <strong>IMC / uPVC</strong> · ฝังดินใช้ <strong>HDPE/PE</strong> ฝังลึก ≥ 60 ซม.</p>
     ${conduitHTML()}
-    <h2>4. สรุปรายการอุปกรณ์ (Hikvision)</h2>
+    <h2>5. สรุปรายการอุปกรณ์ (Hikvision)</h2>
     <table>
       <thead><tr><th>รายการ</th><th>จำนวน</th><th>รุ่นแนะนำ</th></tr></thead>
       <tbody>${rows.map(r => `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('')}</tbody>
     </table>
-    <h2 class="page-break">5. ข้อแนะนำการติดตั้งตามมาตรฐานวิศวกรรม</h2>
+    <h2 class="page-break">6. ข้อแนะนำการติดตั้งตามมาตรฐานวิศวกรรม</h2>
     ${recommendationsHTML()}`;
 }
 
@@ -2066,18 +2183,81 @@ function buildReport() {
    persistence (localStorage)
    ============================================================ */
 const LS_KEY = 'cctv-cabling-design-v1';
+function serializeDesign() {
+  return {
+    devices: state.devices, routes: state.routes, walls: state.walls,
+    pxPerM: state.pxPerM, cal: state.cal, nextId: state.nextId,
+    conduitLabelOffsets: state.conduitLabelOffsets,
+    imgSrcKind: state.imgSrcKind,
+    imgDataUrl: (state.imgSrcKind === 'file' && state.imgDataUrl && state.imgDataUrl.length < 3.5e6)
+      ? state.imgDataUrl : null,
+  };
+}
 function saveLocal() {
-  try {
-    const data = {
-      devices: state.devices, routes: state.routes, walls: state.walls,
-      pxPerM: state.pxPerM, cal: state.cal, nextId: state.nextId,
-      conduitLabelOffsets: state.conduitLabelOffsets,
-      imgSrcKind: state.imgSrcKind,
-      imgDataUrl: (state.imgSrcKind === 'file' && state.imgDataUrl && state.imgDataUrl.length < 3.5e6)
-        ? state.imgDataUrl : null,
-    };
-    localStorage.setItem(LS_KEY, JSON.stringify(data));
-  } catch (e) { /* quota เต็ม — ข้าม */ }
+  try { localStorage.setItem(LS_KEY, JSON.stringify(serializeDesign())); }
+  catch (e) { /* quota เต็ม — ข้าม */ }
+}
+
+/* ============================================================
+   หลายโครงการ — บันทึก/เปิด/ลบ (localStorage)
+   ============================================================ */
+const PROJECTS_KEY = 'cctv-projects-v1';
+function loadProjects() {
+  try { return JSON.parse(localStorage.getItem(PROJECTS_KEY)) || {}; } catch (e) { return {}; }
+}
+function storeProjects(p) {
+  try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(p)); }
+  catch (e) { alert('บันทึกโครงการไม่สำเร็จ — พื้นที่จัดเก็บของเบราว์เซอร์เต็ม (ภาพขนาดใหญ่)'); }
+}
+function renderProjectUI() {
+  const sel = $('#selProject');
+  if (!sel) return;
+  const p = loadProjects();
+  const names = Object.keys(p).sort();
+  sel.innerHTML = names.length
+    ? names.map(n => `<option value="${n}"${n === state.projectName ? ' selected' : ''}>${n}</option>`).join('')
+    : '<option value="">— ยังไม่มีโครงการที่บันทึก —</option>';
+  $('#btnOpenProject').disabled = !names.length;
+  $('#btnDeleteProject').disabled = !names.length;
+}
+function saveProjectAs() {
+  const name = (prompt('ชื่อโครงการ (บันทึกไว้เรียกใช้ภายหลัง):', state.projectName || '') || '').trim();
+  if (!name) return;
+  const p = loadProjects();
+  p[name] = { savedAt: new Date().toISOString(), data: serializeDesign() };
+  storeProjects(p);
+  state.projectName = name;
+  renderProjectUI();
+  $('#statusHint').textContent = `บันทึกโครงการ "${name}" แล้ว (เรียกใช้ภายหลังได้จากช่อง "โครงการ")`;
+}
+function openProject() {
+  const name = $('#selProject').value;
+  const p = loadProjects();
+  if (!name || !p[name]) return;
+  const d = p[name].data;
+  Object.assign(state, {
+    devices: d.devices || [], routes: d.routes || [], walls: d.walls || [],
+    pxPerM: d.pxPerM || null, cal: d.cal || { p1: null, p2: null },
+    nextId: d.nextId || 1, conduitLabelOffsets: d.conduitLabelOffsets || {},
+    selected: null, draft: null, wallDraft: null, altView: null, projectName: name,
+  });
+  if (d.imgSrcKind === 'sample') loadImage('picture.jpg', 'sample');
+  else if (d.imgDataUrl) loadImage(d.imgDataUrl, 'file');
+  else { state.img = null; $('#dropHint').classList.remove('hidden'); }
+  refresh();
+  resetUndo();
+  $('#statusHint').textContent = `เปิดโครงการ "${name}" แล้ว`;
+}
+function deleteProject() {
+  const name = $('#selProject').value;
+  if (!name) return;
+  if (!confirm(`ลบโครงการ "${name}" ออกจากรายการที่บันทึกไว้?`)) return;
+  const p = loadProjects();
+  delete p[name];
+  storeProjects(p);
+  if (state.projectName === name) state.projectName = null;
+  renderProjectUI();
+  $('#statusHint').textContent = `ลบโครงการ "${name}" แล้ว`;
 }
 function loadLocal() {
   try {
@@ -2103,5 +2283,7 @@ resizeCanvas();
 setMode('select');
 loadLocal();
 refresh();
+renderProjectUI();
+resetUndo();
 
 })();
