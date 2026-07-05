@@ -2381,9 +2381,14 @@ function writeProject(name) {
   p[name] = { savedAt: new Date().toISOString(), data: serializeDesign() };
   storeProjects(p);
 }
-// บันทึกโครงการปัจจุบันทันที (ยังไม่มีชื่อ → ขอตั้งชื่อ)
+// บันทึกโครงการปัจจุบันทันที — ยังไม่เคยตั้งชื่อ → ตั้งชื่ออัตโนมัติแล้วบันทึกเลย (ไม่ถามชื่อแบบ "บันทึกเป็น")
 function saveCurrentProject() {
-  if (!state.projectName) { saveProjectAs(); return; }
+  if (!state.projectName) {
+    const existing = loadProjects();
+    let n = 1;
+    while (existing['โครงการ ' + n]) n++;
+    state.projectName = 'โครงการ ' + n;
+  }
   writeProject(state.projectName);
   renderProjectUI();
   $('#statusHint').textContent = `บันทึกโครงการ "${state.projectName}" แล้ว`;
