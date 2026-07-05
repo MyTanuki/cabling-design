@@ -76,6 +76,7 @@ const state = {
 };
 
 let panning = false, dragDev = null, downScr = null, moved = false;
+let dragVertex = null;       // {wall, index} — กำลังลากปลาย/จุดหักของแนวท่อ
 let dragLabel = null;        // {key, midW, gdx, gdy} — กำลังลากป้ายท่อ
 let conduitLabelHits = [];   // กรอบป้ายท่อบนจอจากการวาดรอบล่าสุด (สำหรับ hit-test)
 let lastScr = null;          // ตำแหน่งเมาส์บนจอล่าสุด (สำหรับ edge auto-pan)
@@ -921,6 +922,24 @@ function drawScene(g, proj, k, opts = {}) {
     }
     if (snapped) drawSnapRing(g, proj(snapped), k); // วงแหวนบอกจุดที่จะ snap เข้า
   }
+  // ---- ลาก/ชี้ปลายท่อ (โหมดเลือก): ไฮไลต์จุดที่ลากได้ + วงแหวน snap ตอนลากไปชนเส้นอื่น ----
+  if (opts.screen && state.mode === 'select') {
+    if (dragVertex) {
+      const vp = dragVertex.wall.points[dragVertex.index];
+      const snapped = snapToWalls(vp, null, dragVertex.wall.id);
+      const p = proj(vp);
+      g.strokeStyle = '#67e8f9'; g.lineWidth = 2 * k; g.fillStyle = '#0891b2';
+      g.beginPath(); g.arc(p.x, p.y, 5 * k, 0, Math.PI * 2); g.fill(); g.stroke();
+      if (snapped) drawSnapRing(g, proj(snapped), k);
+    } else if (state.hoverW) {
+      const hv = hitWallVertex(w2s(state.hoverW));
+      if (hv) {
+        const p = proj(hv.wall.points[hv.index]);
+        g.strokeStyle = '#67e8f9'; g.lineWidth = 2 * k;
+        g.beginPath(); g.arc(p.x, p.y, 6 * k, 0, Math.PI * 2); g.stroke();
+      }
+    }
+  }
 
   // ---- ท่อร้อยสายจริง (casing สี+จำนวนสายทับกัน) — เลือกรูปแบบที่ #selConduit ----
   if (opts.screen) conduitLabelHits = [];
@@ -1318,6 +1337,16 @@ function hitWall(scr) {
   }
   return null;
 }
+// จับปลาย/จุดหักของแนวท่อ(จุดยอด) — คืน {wall, index}
+function hitWallVertex(scr) {
+  for (let i = state.walls.length - 1; i >= 0; i--) {
+    const wl = state.walls[i];
+    for (let j = 0; j < wl.points.length; j++) {
+      if (dist(w2s(wl.points[j]), scr) <= 9) return { wall: wl, index: j };
+    }
+  }
+  return null;
+}
 function distToSeg(p, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const len2 = dx * dx + dy * dy;
@@ -1346,16 +1375,17 @@ function snapPoint(prev, pt) {
 // snap เข้าจุดยอด/แนวเส้นขอบอาคารเดิม (หรือจุดของเส้นที่กำลังวาด) เพื่อให้เส้นเชื่อมกันสนิทไม่มีช่องว่าง
 // คืน null ถ้าไม่มีเป้าในรัศมี (ผู้เรียกจะ fallback เป็น ortho/จุดเดิม)
 const SNAP_PX = 12;
-function snapToWalls(pt, draftPts) {
+function snapToWalls(pt, draftPts, excludeId) {
   if (!$('#chkSnap') || !$('#chkSnap').checked) return null;
   const snapR = SNAP_PX / (state.view.s || 1);
   let best = null;
   const consider = v => { const d = dist(pt, v); if (d <= snapR && (!best || d < best.d)) best = { d, p: { x: v.x, y: v.y } }; };
-  state.walls.forEach(w => w.points.forEach(consider));                 // จุดยอดกำแพงเดิม
+  state.walls.forEach(w => { if (w.id !== excludeId) w.points.forEach(consider); });   // จุดยอดกำแพงเดิม
   if (draftPts) for (let i = 0; i < draftPts.length - 1; i++) consider(draftPts[i]); // จุด draft (เว้นจุดล่าสุด) — ช่วยปิด loop เข้าจุดแรก
   if (best) return best.p;
   let bestSeg = null;                                                    // จุดบนแนวเส้นกำแพงเดิม
   state.walls.forEach(w => {
+    if (w.id === excludeId) return;
     for (let i = 1; i < w.points.length; i++) {
       const r = projToSeg(pt, w.points[i - 1], w.points[i]);
       if (r.d <= snapR && (!bestSeg || r.d < bestSeg.d)) bestSeg = { d: r.d, p: r.proj };
@@ -1376,7 +1406,7 @@ function setMode(m) {
 }
 
 const HINTS = {
-  select: 'คลิกเพื่อเลือกจุด/เส้น · ลากจุดเพื่อย้าย · ลากป้ายท่อ/ป้ายระยะเพื่อจัดตำแหน่งป้าย · ลากพื้นที่ว่างเพื่อเลื่อนภาพ · ล้อเมาส์เพื่อซูม',
+  select: 'คลิกเพื่อเลือกจุด/เส้น · ลากอุปกรณ์/ปลายท่อเพื่อย้าย · ลากป้ายเพื่อจัดตำแหน่ง · ลากพื้นที่ว่างเพื่อเลื่อนภาพ · ล้อเมาส์เพื่อซูม',
   calibrate: 'คลิกจุดที่ 1 และจุดที่ 2 บนแถบสเกลของภาพ แล้วกรอกระยะจริงในขั้นตอนที่ 2',
   'place-onu': 'คลิกตำแหน่งติดตั้ง FTTx ONU (ดาวแดง) · คลิกขวา/Esc เพื่อเลิกวาง',
   'place-dsw': 'คลิกตำแหน่งติดตั้ง Distribution Switch · คลิกขวา/Esc เพื่อเลิกวาง',
@@ -1436,6 +1466,8 @@ canvas.addEventListener('mousedown', e => {
       dragLabel = { key: lb.key, midW: lb.midW, gdx: lb.x + lb.w / 2 - scr.x, gdy: lb.y + lb.h / 2 - scr.y };
       return;
     }
+    const v = hitWallVertex(scr); // จับปลาย/จุดหักของแนวท่อเพื่อลากย้าย
+    if (v) { dragVertex = v; return; }
   }
   if (e.button === 1 || (e.button === 0 && state.mode === 'select' && !hitDevice(scr) && !hitRoute(scr) && !hitWall(scr))) {
     panning = true;
@@ -1461,10 +1493,17 @@ canvas.addEventListener('mousemove', e => {
       if (r.fromId === dragDev.id) r.points[0] = { x: w.x, y: w.y };
       if (r.toId === dragDev.id) r.points[r.points.length - 1] = { x: w.x, y: w.y };
     }
+  } else if (dragVertex && moved) {
+    const w = s2w(scr);
+    const snapped = snapToWalls(w, null, dragVertex.wall.id) || w; // ลากไปชนเส้นอื่น = ดูดติดกัน
+    dragVertex.wall.points[dragVertex.index] = { x: snapped.x, y: snapped.y };
   } else if (dragLabel && moved) {
     const c = s2w({ x: scr.x + dragLabel.gdx, y: scr.y + dragLabel.gdy });
     state.conduitLabelOffsets[dragLabel.key] = { x: c.x - dragLabel.midW.x, y: c.y - dragLabel.midW.y };
   }
+  // เปลี่ยนเคอร์เซอร์เมื่อชี้ปลาย/จุดหักของแนวท่อ (บอกว่าลากได้)
+  if (state.mode === 'select' && !dragVertex && !dragDev)
+    canvas.style.cursor = hitWallVertex(scr) ? 'move' : 'default';
   lastScr = scr;
   updateAutoPan(scr);       // ชนขอบขณะวาดสาย/กำแพง → เลื่อนภาพให้เห็นเพิ่ม
   const wpt = state.hoverW;
@@ -1501,8 +1540,8 @@ canvas.addEventListener('mouseup', e => {
   const wasClick = !moved;
   const draggedDev = (dragDev && moved) ? dragDev : null;
   const clickedLabel = (dragLabel && !moved) ? dragLabel : null; // จับป้ายแล้วปล่อยโดยไม่ลาก = คลิกป้าย
-  const wasDrag = draggedDev || (dragLabel && moved);
-  panning = false; dragDev = null; dragLabel = null; downScr = null;
+  const wasDrag = draggedDev || (dragLabel && moved) || (dragVertex && moved);
+  panning = false; dragDev = null; dragLabel = null; dragVertex = null; downScr = null;
   if (wasDrag) {
     if (draggedDev) rerouteAutoForDevice(draggedDev);
     refresh();
