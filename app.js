@@ -874,16 +874,19 @@ function drawScene(g, proj, k, opts = {}) {
     const dangle = [isDanglingEnd(wl, wl.points[0]), isDanglingEnd(wl, wl.points[wl.points.length - 1])];
     drawWall(g, wl.points.map(proj), k, sel, color, dangle);
   }
-  if (opts.screen && state.wallDraft) {
-    drawWall(g, state.wallDraft.points.map(proj), k, true);
-    if (state.hoverW && state.wallDraft.points.length) {
-      const last = state.wallDraft.points[state.wallDraft.points.length - 1];
-      const nxt = snapPoint(last, state.hoverW);
+  if (opts.screen && state.wallDraft) drawWall(g, state.wallDraft.points.map(proj), k, true);
+  if (opts.screen && state.mode === 'wall' && state.hoverW) {
+    const draftPts = state.wallDraft ? state.wallDraft.points : null;
+    const snapped = snapToWalls(state.hoverW, draftPts);
+    if (draftPts && draftPts.length) {
+      const last = draftPts[draftPts.length - 1];
+      const nxt = snapped || snapPoint(last, state.hoverW);
       const a = proj(last), b = proj(nxt);
       g.strokeStyle = '#22d3ee'; g.lineWidth = 1.5 * k; g.setLineDash([4 * k, 4 * k]);
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
       g.setLineDash([]);
     }
+    if (snapped) drawSnapRing(g, proj(snapped), k); // วงแหวนบอกจุดที่จะ snap เข้า
   }
 
   // ---- ท่อร้อยสายจริง (casing สี+จำนวนสายทับกัน) — เลือกรูปแบบที่ #selConduit ----
@@ -938,11 +941,13 @@ function drawScene(g, proj, k, opts = {}) {
     strokePoly(g, pts, '#38bdf8', 3 * k, k, false, [8 * k, 5 * k]);
     if (state.hoverW) {
       const last = state.draft.points[state.draft.points.length - 1];
-      const nxt = snapPoint(last, state.hoverW);
+      const snapped = snapToWalls(state.hoverW, null);
+      const nxt = snapped || snapPoint(last, state.hoverW);
       const a = proj(last), b = proj(nxt);
       g.strokeStyle = '#38bdf8'; g.lineWidth = 2 * k; g.setLineDash([4 * k, 4 * k]);
       g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
       g.setLineDash([]);
+      if (snapped) drawSnapRing(g, b, k);
       if (state.pxPerM) {
         const L = (polyLenPx(state.draft.points) + dist(last, nxt)) / state.pxPerM;
         pill(g, { x: b.x + 14 * k, y: b.y - 14 * k }, `${L.toFixed(0)} ม.`, '#38bdf8', k);
@@ -956,6 +961,15 @@ function drawScene(g, proj, k, opts = {}) {
     const sel = state.selected && state.selected.kind === 'device' && state.selected.id === d.id;
     drawDevice(g, d, p, k, sel);
   }
+}
+
+function drawSnapRing(g, p, k) {
+  g.save();
+  g.strokeStyle = '#fbbf24'; g.lineWidth = 2 * k;
+  g.beginPath(); g.arc(p.x, p.y, 7 * k, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = '#fbbf24';
+  g.beginPath(); g.arc(p.x, p.y, 2 * k, 0, Math.PI * 2); g.fill();
+  g.restore();
 }
 
 function strokePoly(g, pts, color, w, k, glow, dash) {
@@ -1296,6 +1310,27 @@ function snapPoint(prev, pt) {
   return dx >= dy ? { x: pt.x, y: prev.y } : { x: prev.x, y: pt.y };
 }
 
+// snap เข้าจุดยอด/แนวเส้นขอบอาคารเดิม (หรือจุดของเส้นที่กำลังวาด) เพื่อให้เส้นเชื่อมกันสนิทไม่มีช่องว่าง
+// คืน null ถ้าไม่มีเป้าในรัศมี (ผู้เรียกจะ fallback เป็น ortho/จุดเดิม)
+const SNAP_PX = 12;
+function snapToWalls(pt, draftPts) {
+  if (!$('#chkSnap') || !$('#chkSnap').checked) return null;
+  const snapR = SNAP_PX / (state.view.s || 1);
+  let best = null;
+  const consider = v => { const d = dist(pt, v); if (d <= snapR && (!best || d < best.d)) best = { d, p: { x: v.x, y: v.y } }; };
+  state.walls.forEach(w => w.points.forEach(consider));                 // จุดยอดกำแพงเดิม
+  if (draftPts) for (let i = 0; i < draftPts.length - 1; i++) consider(draftPts[i]); // จุด draft (เว้นจุดล่าสุด) — ช่วยปิด loop เข้าจุดแรก
+  if (best) return best.p;
+  let bestSeg = null;                                                    // จุดบนแนวเส้นกำแพงเดิม
+  state.walls.forEach(w => {
+    for (let i = 1; i < w.points.length; i++) {
+      const r = projToSeg(pt, w.points[i - 1], w.points[i]);
+      if (r.d <= snapR && (!bestSeg || r.d < bestSeg.d)) bestSeg = { d: r.d, p: r.proj };
+    }
+  });
+  return bestSeg ? { x: bestSeg.p.x, y: bestSeg.p.y } : null;
+}
+
 function setMode(m) {
   if (state.draft) { state.draft = null; }
   if (state.wallDraft) commitWall();
@@ -1493,10 +1528,11 @@ function handleClick(scr) {
       return;
     }
     case 'wall': {
-      if (!state.wallDraft) state.wallDraft = { points: [w] };
+      const snapped = snapToWalls(w, state.wallDraft ? state.wallDraft.points : null);
+      if (!state.wallDraft) state.wallDraft = { points: [snapped || w] };
       else {
         const last = state.wallDraft.points[state.wallDraft.points.length - 1];
-        state.wallDraft.points.push(snapPoint(last, w));
+        state.wallDraft.points.push(snapped || snapPoint(last, w));
       }
       draw();
       return;
@@ -1530,7 +1566,7 @@ function handleClick(scr) {
         refresh();
       } else if (!d) {
         const last = state.draft.points[state.draft.points.length - 1];
-        state.draft.points.push(snapPoint(last, w));
+        state.draft.points.push(snapToWalls(w, null) || snapPoint(last, w));
         draw();
       }
       return;
