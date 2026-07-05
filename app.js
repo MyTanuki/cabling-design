@@ -18,6 +18,7 @@ const CAT6_MAX = 180;            // เมตร — เกินนี้ต้
 const TIA_CH_MAX = 100;          // เมตร — channel limit ตาม TIA-568
 const BRANCH_MAX_M = 10;         // เมตร — จุดติดตั้งห่างแนวท่อไม่เกินนี้จึง branch จากแนวเดิมได้
 const PATCH_MAX_M = 4;           // เมตร — ลิงก์สั้นมาก (ตู้เดียวกัน เช่น ONU→DSW) ต่อตรงได้ นอกนั้นเดินตามแนวท่อ
+const PATCH_DETOUR = 2.5;        // ต่อตรงเฉพาะเมื่อเดินตามท่อแล้วอ้อมไกลกว่าเส้นตรงเกินเท่านี้ (กันตู้เดียวกันอ้อมออกไปแนวท่อ)
 const SLACK_FACTOR = 1.10;       // เผื่อความยาวสาย 10%
 const SLACK_ENDS = 10;           // service loop ปลายทางรวม (ม.)
 
@@ -436,15 +437,14 @@ function makeRouter(devs) {
     }
   const branchPx = (state.pxPerM ? BRANCH_MAX_M * state.pxPerM : 30) + 0.5; // +epsilon กันปัดเศษ
   const patchPx = (state.pxPerM ? PATCH_MAX_M * state.pxPerM : 12) + 0.5;   // ระยะ "ต่อตรง" สำหรับลิงก์สั้นมาก
-  // อุปกรณ์เชื่อมเข้าแนวท่อ "จุดฉายตั้งฉากบนตัวช่วง" ที่ใกล้ที่สุด (ตามกติกา: นอกแนว→เข้าหาจุดใกล้สุด)
-  // ใช้เฉพาะจุดที่ฉากตกบนช่วง (0<t<1) เพื่อได้เส้น drop ตั้งฉากสะอาด ไม่ใช่เส้นทแยงไปมุม/ปลายท่อ
+  // อุปกรณ์เชื่อมเข้า "จุดบนแนวท่อที่ใกล้ที่สุดจริง" (ตามกติกา: นอกแนว→เข้าหาจุดใกล้สุด)
+  // เลือกเฉพาะจุดที่ใกล้สุด (+ จุดที่ระยะใกล้เคียงกันมากเป็น tie) — ไม่แตะแนวท่อที่อยู่ไกลกว่า
+  // จุดฉายอาจเป็นกลางช่วง (ตั้งฉาก) หรือปลายช่วง (เลยแนว) ก็ได้ แล้ว orthoDrops จัดช่วงปลายให้เป็นแนวฉาก
   const drops = [];
   devs.forEach(d => {
     const projs = segs.map((s, i) => ({ i, ...projToSeg(d, s[0], s[1]) })).sort((x, y) => x.d - y.d);
-    const lim = projs[0].d * 1.8 + (state.pxPerM ? 10 * state.pxPerM : 30);
-    const perp = projs.filter(p => p.t > 1e-3 && p.t < 1 - 1e-3 && p.d <= lim).slice(0, 4);
-    const chosen = perp.length ? perp : projs.slice(0, 1); // ไม่มีจุดตั้งฉากเลย (เลยปลายท่อ) → ใช้จุดใกล้สุด
-    chosen.forEach(p => {
+    const near = projs[0].d;
+    projs.filter(p => p.d <= near * 1.25 + 1).slice(0, 3).forEach(p => {
       splits[p.i].push(p.t);
       drops.push([d, p.proj]);
     });
@@ -522,7 +522,9 @@ function makeRouter(devs) {
       if (ka === kb || !adj.has(ka) || !adj.has(kb)) return branch; // ไม่เชื่อมกราฟ → ต่อตรงเฉพาะระยะ branch
       const keys = rawPath(ka, kb, reuseBias.size ? reuseBias : null);
       if (!keys) return branch; // กราฟไม่ต่อถึงกัน — ยอมให้เฉพาะระยะ branch
-      if (patch && polyLenPx(patch) < keysLen(keys)) return patch; // เฉพาะลิงก์สั้นมากเท่านั้นที่ต่อตรง
+      // ต่อตรงเฉพาะลิงก์สั้นมาก "และ" การเดินตามท่ออ้อมไกลกว่ามาก (ตู้เดียวกันที่อยู่ลึกจากแนวท่อ)
+      // ไม่งั้นเดินตามแนวท่อเสมอ (กล้องใกล้ท่อ 3 ม. ก็ให้เลาะท่อ ไม่ต่อตรง)
+      if (patch && keysLen(keys) > polyLenPx(patch) * PATCH_DETOUR) return patch;
       return orthoDrops(keysPts(keys)); // ปกติ: เดินตามแนวท่อ (ทำช่วง drop ปลายให้เป็นแนวฉาก)
     },
     // เรียกหลังจาก path(a,b) ถูกใช้จริงแล้ว — กดต้นทุนช่วงที่เพิ่งเดินผ่านให้ถูกลง
@@ -544,8 +546,8 @@ function makeRouter(devs) {
       const g = (adj.has(ka) && adj.has(kb))
         ? (dijkstra(ka).distM.get(kb) ?? Infinity)
         : Infinity;
-      // ต่อถึงตามแนวท่อ → ใช้ระยะแนวท่อ (ลิงก์สั้นมากค่อยเทียบเส้นตรง) · ไม่ต่อถึง → branch หรือไปไม่ถึง
-      if (isFinite(g)) return euclid <= patchPx ? Math.min(euclid, g) : g;
+      // ต่อถึงตามแนวท่อ → ใช้ระยะแนวท่อ (ยกเว้นลิงก์สั้นที่อ้อมไกลจริงจึงใช้เส้นตรง) · ไม่ต่อถึง → branch หรือไปไม่ถึง
+      if (isFinite(g)) return (euclid <= patchPx && g > euclid * PATCH_DETOUR) ? euclid : g;
       return euclid <= branchPx ? euclid : Infinity;
     },
     // แนวเดินสายทางเลือก: หาเส้นทางสำรองโดยกดน้ำหนักเส้นทางที่พบแล้ว (penalty method)
