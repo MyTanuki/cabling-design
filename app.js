@@ -1363,12 +1363,31 @@ canvas.addEventListener('mousemove', e => {
   draw();
 });
 
+// ย้ายอุปกรณ์ที่มีเส้น auto เชื่อมอยู่ → คำนวณแนวเส้นใหม่ให้เลาะกำแพงไปยังตำแหน่งใหม่
+// (ระหว่างลากอัปเดตแค่ปลายเส้น จุดหักกลางเลยค้างเดิม กลายเป็นเส้นหัก — คำนวณใหม่ตอนปล่อยเมาส์)
+function rerouteAutoForDevice(dev) {
+  const affected = state.routes.filter(r => r.auto && !isWireless(r) && (r.fromId === dev.id || r.toId === dev.id));
+  if (!affected.length) return;
+  const router = makeRouter(state.devices.map(d => ({ x: d.x, y: d.y })));
+  for (const r of affected) {
+    const a = deviceById(r.fromId), b = deviceById(r.toId);
+    if (!a || !b) continue;
+    const pts = router.path({ x: a.x, y: a.y }, { x: b.x, y: b.y });
+    if (pts) r.points = pts; // ถ้า null (ต่อไม่ถึงตามแนว) คงจุดที่ลากไว้ ให้ renderWarnings เตือนว่าออกนอกแนว
+  }
+}
+
 canvas.addEventListener('mouseup', e => {
   const scr = mousePos(e);
   const wasClick = !moved;
-  const wasDrag = (dragDev && moved) || (dragLabel && moved);
+  const draggedDev = (dragDev && moved) ? dragDev : null;
+  const wasDrag = draggedDev || (dragLabel && moved);
   panning = false; dragDev = null; dragLabel = null; downScr = null;
-  if (wasDrag) { refresh(); return; }
+  if (wasDrag) {
+    if (draggedDev) rerouteAutoForDevice(draggedDev);
+    refresh();
+    return;
+  }
   if (!wasClick || e.button !== 0 || !state.img) return;
   handleClick(scr);
 });
