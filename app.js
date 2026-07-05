@@ -2128,9 +2128,10 @@ function renderExportCanvas() {
 }
 
 $('#btnUndo').addEventListener('click', undo);
+$('#btnSaveCurrent').addEventListener('click', saveCurrentProject);
 $('#btnSaveProject').addEventListener('click', saveProjectAs);
-$('#btnOpenProject').addEventListener('click', openProject);
 $('#btnDeleteProject').addEventListener('click', deleteProject);
+$('#selProject').addEventListener('change', onSelectProject);
 
 $('#btnExportPng').addEventListener('click', () => {
   const off = renderExportCanvas();
@@ -2230,21 +2231,30 @@ function renderProjectUI() {
   sel.innerHTML = names.length
     ? names.map(n => `<option value="${n}"${n === state.projectName ? ' selected' : ''}>${n}</option>`).join('')
     : '<option value="">— ยังไม่มีโครงการที่บันทึก —</option>';
-  $('#btnOpenProject').disabled = !names.length;
   $('#btnDeleteProject').disabled = !names.length;
+}
+// เขียนงานปัจจุบันลงชื่อโครงการที่กำหนด
+function writeProject(name) {
+  const p = loadProjects();
+  p[name] = { savedAt: new Date().toISOString(), data: serializeDesign() };
+  storeProjects(p);
+}
+// บันทึกโครงการปัจจุบันทันที (ยังไม่มีชื่อ → ขอตั้งชื่อ)
+function saveCurrentProject() {
+  if (!state.projectName) { saveProjectAs(); return; }
+  writeProject(state.projectName);
+  renderProjectUI();
+  $('#statusHint').textContent = `บันทึกโครงการ "${state.projectName}" แล้ว`;
 }
 function saveProjectAs() {
   const name = (prompt('ชื่อโครงการ (บันทึกไว้เรียกใช้ภายหลัง):', state.projectName || '') || '').trim();
   if (!name) return;
-  const p = loadProjects();
-  p[name] = { savedAt: new Date().toISOString(), data: serializeDesign() };
-  storeProjects(p);
+  writeProject(name);
   state.projectName = name;
   renderProjectUI();
-  $('#statusHint').textContent = `บันทึกโครงการ "${name}" แล้ว (เรียกใช้ภายหลังได้จากช่อง "โครงการ")`;
+  $('#statusHint').textContent = `บันทึกโครงการ "${name}" แล้ว`;
 }
-function openProject() {
-  const name = $('#selProject').value;
+function loadProjectByName(name) {
   const p = loadProjects();
   if (!name || !p[name]) return;
   const d = p[name].data;
@@ -2259,7 +2269,15 @@ function openProject() {
   else { state.img = null; $('#dropHint').classList.remove('hidden'); }
   refresh();
   resetUndo();
+  renderProjectUI();
   $('#statusHint').textContent = `เปิดโครงการ "${name}" แล้ว`;
+}
+// เลือกชื่อโครงการอื่นใน dropdown = บันทึกงานปัจจุบัน (ถ้ามีชื่อ) แล้วโหลดที่เลือกอัตโนมัติ
+function onSelectProject() {
+  const name = $('#selProject').value;
+  if (!name || name === state.projectName) return;
+  if (state.projectName) writeProject(state.projectName); // บันทึกงานปัจจุบันก่อนสลับ
+  loadProjectByName(name);
 }
 function deleteProject() {
   const name = $('#selProject').value;

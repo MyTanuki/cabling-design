@@ -81,13 +81,13 @@
       <details class="step" id="stepProject" open>
         <summary><span class="stepno">💾</span> โครงการ (Projects)</summary>
         <div class="step-body">
-          <p class="muted">บันทึกงานปัจจุบันเป็นโครงการ เพื่อเรียกใช้ภายหลัง หรือสลับหลายโครงการ</p>
+          <p class="muted">บันทึกงานเป็นโครงการเพื่อเรียกใช้ภายหลัง · เลือกชื่อโครงการอื่นเพื่อสลับ (บันทึกงานปัจจุบันแล้วโหลดที่เลือกอัตโนมัติ)</p>
           <div class="row">
-            <select id="selProject" title="เลือกโครงการที่บันทึกไว้"><option value="">— ยังไม่มีโครงการที่บันทึก —</option></select>
+            <select id="selProject" title="เลือกชื่อเพื่อสลับโครงการ — ระบบบันทึกงานปัจจุบันแล้วโหลดที่เลือกให้อัตโนมัติ"><option value="">— ยังไม่มีโครงการที่บันทึก —</option></select>
           </div>
           <div class="row">
-            <button id="btnSaveProject" class="btn primary" title="บันทึกงานปัจจุบันเป็นโครงการใหม่/ทับชื่อเดิม">💾 บันทึกเป็น…</button>
-            <button id="btnOpenProject" class="btn" title="เปิดโครงการที่เลือก" disabled>📂 เปิด</button>
+            <button id="btnSaveCurrent" class="btn primary" title="บันทึกโครงการปัจจุบันทันที">💾 บันทึก</button>
+            <button id="btnSaveProject" class="btn" title="บันทึกเป็นโครงการใหม่ (ตั้งชื่อ)">➕ บันทึกเป็น…</button>
             <button id="btnDeleteProject" class="btn danger" title="ลบโครงการที่เลือก" disabled>🗑️ ลบ</button>
           </div>
         </div>
