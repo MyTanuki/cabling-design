@@ -491,8 +491,11 @@ function makeRouter(devs) {
     }
   });
   drops.forEach(([d, pr]) => edge(d, pr));
-  // โหนดตำแหน่งอุปกรณ์ — ใช้เป็นต้นทาง/ปลายทางเท่านั้น ห้ามเดินสายทะลุผ่าน (กันสายอ้อมผ่านกล้องอื่น)
-  const deviceKeys = new Set(devs.map(keyOf));
+  // โหนดอุปกรณ์ที่ "อยู่นอกแนวท่อ" — ใช้เป็นต้นทาง/ปลายทางเท่านั้น ห้ามเดินสายทะลุผ่าน (กันสายอ้อมผ่านกล้องอื่น)
+  // อุปกรณ์ที่เกาะบนแนวท่อ (เช่น สวิตช์ที่ snap เข้าขอบอาคาร) เป็น "จุดร่วมท่อ" ต้องให้สายอื่นเดินผ่านได้
+  // ไม่งั้นแนวท่อถูกตัดขาดตรงจุดนั้น สายที่ควรวิ่งตรงผ่านจะถูกบังคับให้อ้อมไกล
+  const onWall = d => segs.some(s => projToSeg(d, s[0], s[1]).d < 1);
+  const deviceKeys = new Set(devs.filter(d => !onWall(d)).map(keyOf));
 
   const cache = new Map();
   const edgeKey = (a, b) => (a < b ? a + '|' + b : b + '|' + a);
@@ -2350,6 +2353,7 @@ function renderWarnings() {
     if (far.length)
       warns.push(`อุปกรณ์อยู่ห่างแนวอาคาร/ท่อเกิน ${BRANCH_MAX_M} ม. (ลากสายอัตโนมัติไม่ได้): ${far.map(d => d.label).join(', ')} — วาดแนวท่อไปให้ถึง`);
     const tol = 3; // px — เผื่อความคลาดเคลื่อนของการลากมือ
+    const router = state.devices.length ? makeRouter(state.devices.map(d => ({ x: d.x, y: d.y }))) : null;
     for (const r of state.routes) {
       if (isWireless(r)) continue; // ลิงก์ไร้สายข้ามพื้นที่ว่างได้ ไม่ต้องเลาะแนวท่อ
       if (polyLenPx(r.points) <= branchPx && r.points.length === 2) continue; // patch สั้นในตู้เดียวกัน
@@ -2363,7 +2367,17 @@ function renderWarnings() {
         if (i === r.points.length - 1 && aOK && distToWalls(b) <= branchPx) continue;
         off++;
       }
-      if (off) warns.push(`${routeLabel(r)}: มีช่วงเดินนอกแนวอาคาร/ท่อ ${off} ช่วง — ปรับแนวหรือวาดแนวท่อเพิ่ม`);
+      if (off) { warns.push(`${routeLabel(r)}: มีช่วงเดินนอกแนวอาคาร/ท่อ ${off} ช่วง — ปรับแนวหรือวาดแนวท่อเพิ่ม`); continue; }
+      // เดินตามแนวจริงแต่ "อ้อมไกลผิดปกติ" เทียบเส้นทางสั้นสุดบนแนวท่อ (เช่น มีอะไรไปตัดขาดแนว)
+      if (router) {
+        const a = deviceById(r.fromId), b = deviceById(r.toId);
+        if (a && b) {
+          const short = router.dist({ x: a.x, y: a.y }, { x: b.x, y: b.y });
+          const actual = polyLenPx(r.points);
+          if (isFinite(short) && short > branchPx && actual > short * 1.5 + branchPx)
+            warns.push(`${routeLabel(r)}: แนวสายอ้อมไกลผิดปกติ (~${(actual / state.pxPerM).toFixed(0)} ม. เทียบเส้นทางสั้นสุด ~${(short / state.pxPerM).toFixed(0)} ม.) — กด 🔀 ดูแนวทางเลือกที่สั้นกว่า หรือคำนวณแนวสายใหม่`);
+        }
+      }
     }
   }
   // ตรวจพอร์ต PoE Switch เกิน 8
