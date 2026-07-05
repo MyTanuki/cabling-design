@@ -425,7 +425,6 @@ function samePath(a, b) {
 function orthoDrops(pts, aOnWall, bOnWall) {
   if (!$('#chkOrtho').checked || pts.length < 3) return pts;
   const out = pts.map(p => ({ x: p.x, y: p.y }));
-  const diag = (a, b) => Math.abs(a.x - b.x) > 1 && Math.abs(a.y - b.y) > 1;
   // ช่วง drop (dropA→dropB) ตั้งฉากกับแนวท่อ (condA→condB) หรือไม่ (|cos| ≈ 0)
   const perp = (dropA, dropB, condA, condB) => {
     const ux = dropB.x - dropA.x, uy = dropB.y - dropA.y;
@@ -443,9 +442,11 @@ function orthoDrops(pts, aOnWall, bOnWall) {
     return { x: con.x + ux * s, y: con.y + uy * s };
   };
   const n = out.length;
-  if (!bOnWall && diag(out[n - 2], out[n - 1]) && !perp(out[n - 2], out[n - 1], out[n - 3], out[n - 2]))
+  // ดัดช่วง drop ให้ตั้งฉากกับแนวท่อ ยกเว้น: ปลายเกาะบนแนว (onWall) หรือ drop ตั้งฉากอยู่แล้ว (perp)
+  // เดิมมีเงื่อนไข diag() ด้วย แต่มันปล่อย drop แนวดิ่ง/นอนบนท่อ "เอียง" ที่ไม่ตั้งฉากให้ผ่าน
+  if (!bOnWall && !perp(out[n - 2], out[n - 1], out[n - 3], out[n - 2]))
     out.splice(n - 1, 0, corner(out[n - 1], out[n - 2], out[n - 3]));
-  if (!aOnWall && diag(out[0], out[1]) && !perp(out[1], out[0], out[1], out[2]))
+  if (!aOnWall && !perp(out[1], out[0], out[1], out[2]))
     out.splice(1, 0, corner(out[0], out[1], out[2]));
   return out;
 }
