@@ -912,10 +912,10 @@ function drawScene(g, proj, k, opts = {}) {
       const pm = proj(mid);
       const center = rOff ? proj({ x: mid.x + rOff.x, y: mid.y + rOff.y })
         : { x: pm.x - uy * side * 34 * k, y: pm.y + ux * side * 34 * k };
-      rRect = conduitCallout(g, pm, center, [txt], cable.color, k);
+      rRect = conduitCallout(g, pm, center, [txt], cable.color, k, sel);
     } else {
       const pos = rOff ? proj({ x: mid.x + rOff.x, y: mid.y + rOff.y }) : proj(mid);
-      rRect = pill(g, pos, txt, cable.color, k);
+      rRect = pill(g, pos, txt, cable.color, k, sel);
     }
     if (opts.screen && rRect) conduitLabelHits.push({ ...rRect, key: rKey, midW: mid });
   });
@@ -991,15 +991,19 @@ function polyMidpoint(points) {
   return points[0];
 }
 
-function pill(g, p, text, color, k) {
-  g.font = `${11.5 * k}px "Segoe UI", "Leelawadee UI", sans-serif`;
-  const w = g.measureText(text).width + 12 * k, h = 17 * k;
+function pill(g, p, text, color, k, sel) {
+  g.save();
+  g.font = `${(sel ? 13 : 11.5) * k}px "Segoe UI", "Leelawadee UI", sans-serif`;
+  const w = g.measureText(text).width + (sel ? 16 : 12) * k, h = (sel ? 20 : 17) * k;
   const x = p.x - w / 2, y = p.y - h / 2;
-  g.fillStyle = 'rgba(10,15,28,.88)';
+  if (sel) { g.shadowColor = color; g.shadowBlur = 10 * k; }
+  g.fillStyle = sel ? 'rgba(10,15,28,.97)' : 'rgba(10,15,28,.88)';
   roundRect(g, x, y, w, h, 8 * k); g.fill();
-  g.strokeStyle = color; g.lineWidth = 1 * k; roundRect(g, x, y, w, h, 8 * k); g.stroke();
-  g.fillStyle = color; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.shadowBlur = 0;
+  g.strokeStyle = sel ? '#fff' : color; g.lineWidth = (sel ? 2 : 1) * k; roundRect(g, x, y, w, h, 8 * k); g.stroke();
+  g.fillStyle = sel ? '#fff' : color; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText(text, p.x, p.y + 0.5 * k);
+  g.restore();
   return { x, y, w, h };
 }
 
@@ -1117,22 +1121,26 @@ function drawConduitOverlay(g, proj, k, mode, screen) {
   });
 }
 
-function conduitCallout(g, anchor, center, lines, color, k) {
+function conduitCallout(g, anchor, center, lines, color, k, sel) {
+  g.save();
   const cx = center.x, cy = center.y;
-  g.font = `${11 * k}px "Segoe UI", "Leelawadee UI", sans-serif`;
-  const w = Math.max(...lines.map(t => g.measureText(t).width)) + 14 * k;
-  const lh = 14.5 * k, h = lines.length * lh + 8 * k;
+  g.font = `${(sel ? 12 : 11) * k}px "Segoe UI", "Leelawadee UI", sans-serif`;
+  const w = Math.max(...lines.map(t => g.measureText(t).width)) + (sel ? 18 : 14) * k;
+  const lh = (sel ? 16 : 14.5) * k, h = lines.length * lh + 8 * k;
   const x = cx - w / 2, y = cy - h / 2;
   // เส้นชี้จากแนวท่อไปยังกรอบ (วาดก่อน ให้กรอบทับปลายเส้น)
-  g.strokeStyle = color; g.lineWidth = 1.2 * k;
+  g.strokeStyle = color; g.lineWidth = (sel ? 2 : 1.2) * k;
   g.beginPath(); g.moveTo(anchor.x, anchor.y); g.lineTo(cx, cy); g.stroke();
   g.fillStyle = color;
-  g.beginPath(); g.arc(anchor.x, anchor.y, 2.5 * k, 0, Math.PI * 2); g.fill();
-  g.fillStyle = 'rgba(10,15,28,.92)';
+  g.beginPath(); g.arc(anchor.x, anchor.y, (sel ? 3.5 : 2.5) * k, 0, Math.PI * 2); g.fill();
+  if (sel) { g.shadowColor = color; g.shadowBlur = 10 * k; }
+  g.fillStyle = sel ? 'rgba(10,15,28,.97)' : 'rgba(10,15,28,.92)';
   roundRect(g, x, y, w, h, 4 * k); g.fill();
-  g.strokeStyle = color; g.lineWidth = 1.2 * k; roundRect(g, x, y, w, h, 4 * k); g.stroke();
-  g.fillStyle = '#e2e8f0'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.shadowBlur = 0;
+  g.strokeStyle = sel ? '#fff' : color; g.lineWidth = (sel ? 2 : 1.2) * k; roundRect(g, x, y, w, h, 4 * k); g.stroke();
+  g.fillStyle = sel ? '#fff' : '#e2e8f0'; g.textAlign = 'center'; g.textBaseline = 'middle';
   lines.forEach((t, i) => g.fillText(t, cx, y + 4 * k + lh * (i + 0.5)));
+  g.restore();
   return { x, y, w, h };
 }
 
