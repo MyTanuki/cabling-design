@@ -1095,6 +1095,8 @@ function drawConduitOverlay(g, proj, k, mode, screen) {
       byCable[nm] = (byCable[nm] || 0) + 1;
     });
     const cableLine = Object.entries(byCable).map(([nm, n]) => `${nm} ×${n}`).join(' + ') || `${run.count} สาย`;
+    // ป้ายท่อเด่นชัดเมื่อเลือกเส้นที่อยู่ในท่อร่วมนี้ (เหมือนป้ายระยะของเส้นสาย)
+    const runSel = state.selected && state.selected.kind === 'route' && run.routeIds.includes(state.selected.id);
     let rect;
     if (mode === 'callout') {
       // กรอบชี้เส้นแบบแบบแปลนวิศวกรรม: ยกกรอบออกด้านข้างแนวท่อ สลับฝั่งกันไม่ให้ซ้อน
@@ -1109,14 +1111,14 @@ function drawConduitOverlay(g, proj, k, mode, screen) {
         `${ENVS[run.env].short} ${run.size}`,
         cableLine,
         `ยาว ${Lm.toFixed(0)} ม.`,
-      ], color, k);
+      ], color, k, runSel);
     } else {
       // ป้ายบนเส้น: ชนิด ขนาด จำนวนสายแยกชนิด ความยาว — เลื่อนลงเล็กน้อยไม่ให้ทับป้ายระยะของเส้นสาย
       const pos = off
         ? proj({ x: midW.x + off.x, y: midW.y + off.y })
         : { x: mid.x, y: mid.y + 18 * k };
       rect = pill(g, pos,
-        `${ENVS[run.env].short} ${run.size.replace(' ×หลายท่อ', '')} · ${cableLine} · ${Lm.toFixed(0)} ม.`, color, k * 0.9);
+        `${ENVS[run.env].short} ${run.size.replace(' ×หลายท่อ', '')} · ${cableLine} · ${Lm.toFixed(0)} ม.`, color, k * 0.9, runSel);
     }
     if (screen && rect) conduitLabelHits.push({ ...rect, key, midW });
   });
