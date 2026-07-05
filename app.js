@@ -1388,16 +1388,27 @@ function rerouteAutoForDevice(dev) {
   }
 }
 
+// route id จากคีย์ป้าย: 'r<id>' = ป้ายระยะของเส้น · '<id1>,<id2>|...' = ป้ายท่อร่วม (ใช้เส้นแรก)
+function routeIdFromLabelKey(key) {
+  if (key[0] === 'r') return +key.slice(1);
+  return +key.split('|')[0].split(',')[0];
+}
+
 canvas.addEventListener('mouseup', e => {
   const scr = mousePos(e);
   const wasClick = !moved;
   const draggedDev = (dragDev && moved) ? dragDev : null;
+  const clickedLabel = (dragLabel && !moved) ? dragLabel : null; // จับป้ายแล้วปล่อยโดยไม่ลาก = คลิกป้าย
   const wasDrag = draggedDev || (dragLabel && moved);
   panning = false; dragDev = null; dragLabel = null; downScr = null;
   if (wasDrag) {
     if (draggedDev) rerouteAutoForDevice(draggedDev);
     refresh();
     return;
+  }
+  if (clickedLabel) { // คลิกป้าย (ท่อ/ระยะ) = เลือกเส้นของป้ายนั้น เพื่อให้ป้ายเด่นชัด
+    const rid = routeIdFromLabelKey(clickedLabel.key);
+    if (state.routes.some(r => r.id === rid)) { state.selected = { kind: 'route', id: rid }; refresh(); return; }
   }
   if (!wasClick || e.button !== 0 || !state.img) return;
   handleClick(scr);
