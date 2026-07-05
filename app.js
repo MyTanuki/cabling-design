@@ -76,6 +76,8 @@ const state = {
 let panning = false, dragDev = null, downScr = null, moved = false;
 let dragLabel = null;        // {key, midW, gdx, gdy} — กำลังลากป้ายท่อ
 let conduitLabelHits = [];   // กรอบป้ายท่อบนจอจากการวาดรอบล่าสุด (สำหรับ hit-test)
+let lastScr = null;          // ตำแหน่งเมาส์บนจอล่าสุด (สำหรับ edge auto-pan)
+const autoPan = { vx: 0, vy: 0, raf: null };
 
 /* ============================================================
    coordinate helpers
@@ -1363,6 +1365,36 @@ function updateHint() {
   $('#statusHint').textContent = t;
 }
 
+/* ============================================================
+   edge auto-pan — ระหว่างวาดสาย/กำแพง เลื่อนเมาส์ชนขอบ = เลื่อนภาพให้เห็นเพิ่ม
+   ============================================================ */
+const EDGE_MARGIN = 44;   // px จากขอบที่เริ่ม auto-pan
+const EDGE_SPEED = 12;    // px/เฟรม สูงสุด
+function autoPanActive() { return !!(state.img && (state.draft || state.wallDraft)); }
+function edgeVel(scr) {
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  let vx = 0, vy = 0;
+  if (scr.x < EDGE_MARGIN) vx = (EDGE_MARGIN - scr.x) / EDGE_MARGIN;            // ชนซ้าย → เผยพื้นที่ซ้าย
+  else if (scr.x > W - EDGE_MARGIN) vx = -(scr.x - (W - EDGE_MARGIN)) / EDGE_MARGIN;
+  if (scr.y < EDGE_MARGIN) vy = (EDGE_MARGIN - scr.y) / EDGE_MARGIN;
+  else if (scr.y > H - EDGE_MARGIN) vy = -(scr.y - (H - EDGE_MARGIN)) / EDGE_MARGIN;
+  return { vx: vx * EDGE_SPEED, vy: vy * EDGE_SPEED };
+}
+function autoPanTick() {
+  autoPan.raf = null;
+  if (!autoPanActive() || (!autoPan.vx && !autoPan.vy)) return;
+  state.view.ox += autoPan.vx; state.view.oy += autoPan.vy;
+  if (lastScr) state.hoverW = s2w(lastScr); // view เปลี่ยน → จุด hover ใต้เมาส์เปลี่ยนตาม
+  draw();
+  autoPan.raf = requestAnimationFrame(autoPanTick);
+}
+function updateAutoPan(scr) {
+  if (!autoPanActive()) { autoPan.vx = autoPan.vy = 0; return; }
+  const v = edgeVel(scr);
+  autoPan.vx = v.vx; autoPan.vy = v.vy;
+  if ((v.vx || v.vy) && !autoPan.raf) autoPan.raf = requestAnimationFrame(autoPanTick);
+}
+
 canvas.addEventListener('mousedown', e => {
   if (!state.img) return;
   const scr = mousePos(e);
@@ -1402,12 +1434,16 @@ canvas.addEventListener('mousemove', e => {
     const c = s2w({ x: scr.x + dragLabel.gdx, y: scr.y + dragLabel.gdy });
     state.conduitLabelOffsets[dragLabel.key] = { x: c.x - dragLabel.midW.x, y: c.y - dragLabel.midW.y };
   }
+  lastScr = scr;
+  updateAutoPan(scr);       // ชนขอบขณะวาดสาย/กำแพง → เลื่อนภาพให้เห็นเพิ่ม
   const wpt = state.hoverW;
   $('#statusPos').textContent = state.pxPerM && state.img
     ? `x ${(wpt.x / state.pxPerM).toFixed(1)} ม., y ${(wpt.y / state.pxPerM).toFixed(1)} ม.`
     : '';
   draw();
 });
+
+canvas.addEventListener('mouseleave', () => { autoPan.vx = autoPan.vy = 0; });
 
 // ย้ายอุปกรณ์ที่มีเส้น auto เชื่อมอยู่ → คำนวณแนวเส้นใหม่ให้เลาะกำแพงไปยังตำแหน่งใหม่
 // (ระหว่างลากอัปเดตแค่ปลายเส้น จุดหักกลางเลยค้างเดิม กลายเป็นเส้นหัก — คำนวณใหม่ตอนปล่อยเมาส์)
