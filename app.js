@@ -926,7 +926,7 @@ function drawScene(g, proj, k, opts = {}) {
   if (opts.screen && state.mode === 'select') {
     if (dragVertex) {
       const vp = dragVertex.wall.points[dragVertex.index];
-      const snapped = snapToWalls(vp, null, dragVertex.wall.id);
+      const snapped = snapDraggedVertex(vp, dragVertex.wall, dragVertex.index);
       const p = proj(vp);
       g.strokeStyle = '#67e8f9'; g.lineWidth = 2 * k; g.fillStyle = '#0891b2';
       g.beginPath(); g.arc(p.x, p.y, 5 * k, 0, Math.PI * 2); g.fill(); g.stroke();
@@ -1375,18 +1375,41 @@ function snapPoint(prev, pt) {
 // snap เข้าจุดยอด/แนวเส้นขอบอาคารเดิม (หรือจุดของเส้นที่กำลังวาด) เพื่อให้เส้นเชื่อมกันสนิทไม่มีช่องว่าง
 // คืน null ถ้าไม่มีเป้าในรัศมี (ผู้เรียกจะ fallback เป็น ortho/จุดเดิม)
 const SNAP_PX = 12;
-function snapToWalls(pt, draftPts, excludeId) {
+function snapToWalls(pt, draftPts) {
   if (!$('#chkSnap') || !$('#chkSnap').checked) return null;
   const snapR = SNAP_PX / (state.view.s || 1);
   let best = null;
   const consider = v => { const d = dist(pt, v); if (d <= snapR && (!best || d < best.d)) best = { d, p: { x: v.x, y: v.y } }; };
-  state.walls.forEach(w => { if (w.id !== excludeId) w.points.forEach(consider); });   // จุดยอดกำแพงเดิม
+  state.walls.forEach(w => w.points.forEach(consider));                 // จุดยอดกำแพงเดิม
   if (draftPts) for (let i = 0; i < draftPts.length - 1; i++) consider(draftPts[i]); // จุด draft (เว้นจุดล่าสุด) — ช่วยปิด loop เข้าจุดแรก
   if (best) return best.p;
   let bestSeg = null;                                                    // จุดบนแนวเส้นกำแพงเดิม
   state.walls.forEach(w => {
-    if (w.id === excludeId) return;
     for (let i = 1; i < w.points.length; i++) {
+      const r = projToSeg(pt, w.points[i - 1], w.points[i]);
+      if (r.d <= snapR && (!bestSeg || r.d < bestSeg.d)) bestSeg = { d: r.d, p: r.proj };
+    }
+  });
+  return bestSeg ? { x: bestSeg.p.x, y: bestSeg.p.y } : null;
+}
+
+// snap สำหรับ "ลากปลาย/จุดหักของแนวท่อ": ดูดเข้าจุดยอด/แนวเส้นของกำแพงอื่น + จุดของเส้นเดียวกัน
+// (เว้นจุดที่ลากและจุดข้างเคียง เพื่อปิด loop ได้โดยไม่ดูดกลับตัวเอง) + ตำแหน่งอุปกรณ์
+function snapDraggedVertex(pt, wall, index) {
+  if (!$('#chkSnap') || !$('#chkSnap').checked) return null;
+  const snapR = SNAP_PX / (state.view.s || 1);
+  let best = null;
+  const consider = v => { const d = dist(pt, v); if (d <= snapR && (!best || d < best.d)) best = { d, p: { x: v.x, y: v.y } }; };
+  state.walls.forEach(w => w.points.forEach((v, j) => {
+    if (w.id === wall.id && Math.abs(j - index) <= 1) return; // เว้นจุดที่ลาก + จุดข้างเคียงติดกัน
+    consider(v);
+  }));
+  state.devices.forEach(consider);                                       // ปลายท่อเข้าหาอุปกรณ์
+  if (best) return best.p;
+  let bestSeg = null;
+  state.walls.forEach(w => {
+    for (let i = 1; i < w.points.length; i++) {
+      if (w.id === wall.id && (i === index || i === index + 1)) continue; // ช่วงที่ต่อกับจุดที่ลาก
       const r = projToSeg(pt, w.points[i - 1], w.points[i]);
       if (r.d <= snapR && (!bestSeg || r.d < bestSeg.d)) bestSeg = { d: r.d, p: r.proj };
     }
@@ -1495,7 +1518,7 @@ canvas.addEventListener('mousemove', e => {
     }
   } else if (dragVertex && moved) {
     const w = s2w(scr);
-    const snapped = snapToWalls(w, null, dragVertex.wall.id) || w; // ลากไปชนเส้นอื่น = ดูดติดกัน
+    const snapped = snapDraggedVertex(w, dragVertex.wall, dragVertex.index) || w; // ลากไปชนเส้นอื่น/อุปกรณ์/ปิด loop = ดูดติดกัน
     dragVertex.wall.points[dragVertex.index] = { x: snapped.x, y: snapped.y };
   } else if (dragLabel && moved) {
     const c = s2w({ x: scr.x + dragLabel.gdx, y: scr.y + dragLabel.gdy });
