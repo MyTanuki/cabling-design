@@ -162,6 +162,18 @@ tr.selected td { background: #0c4a6e; }
 .cable-tag.fiber { background: #ef444422; color: var(--fiber); border: 1px solid var(--fiber); }
 .cable-tag.wireless { background: #a855f722; color: #c084fc; border: 1px solid #a855f7; }
 .topo-wrap { overflow-x: auto; margin: 6px 0; }
+
+/* เมนูคลิกขวาเลือกชนิดท่อ */
+.ctx-menu { position: fixed; z-index: 1000; min-width: 190px; background: #0f172a; border: 1px solid #334155;
+  border-radius: 8px; padding: 5px; box-shadow: 0 8px 24px rgba(0,0,0,.5); font-size: 13px; }
+.ctx-menu.hidden { display: none; }
+.ctx-menu .ctx-head { color: #94a3b8; font-size: 11.5px; padding: 4px 8px 6px; border-bottom: 1px solid #334155; margin-bottom: 4px; }
+.ctx-menu button { display: block; width: 100%; text-align: left; background: transparent; border: 0; color: #e2e8f0;
+  padding: 7px 9px; border-radius: 6px; cursor: pointer; }
+.ctx-menu button:hover { background: #1e293b; }
+.ctx-menu button.active { background: #1e3a8a; color: #fff; }
+.cond-pipe { font-weight: 700; }
+.pipe-badge { color: #38bdf8; font-size: 10px; }
 .route-note { font-size: 10.5px; color: #fbbf24; display: block; margin-top: 2px; }
 td select {
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);

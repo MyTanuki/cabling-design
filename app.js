@@ -44,6 +44,21 @@ const ENVS = {
   buried:  { name: 'ฝังดินใต้ดิน',                   pipe: 'HDPE / PE',       short: 'HDPE' },
 };
 
+// ชนิดท่อร้อยสาย (เลือกเองผ่านคลิกขวาที่เส้นสาย) — ถ้าไม่เลือกใช้ค่าเริ่มต้นตามสภาพแวดล้อม
+const PIPE_TYPES = {
+  EMT:  { short: 'EMT',  name: 'EMT — ท่อโลหะบาง (ในร่ม)',            reel: false },
+  IMC:  { short: 'IMC',  name: 'IMC — ท่อโลหะหนาปานกลาง (กันน้ำ)',    reel: false },
+  RSC:  { short: 'RSC',  name: 'RSC/GS — ท่อโลหะหนา',                 reel: false },
+  uPVC: { short: 'uPVC', name: 'uPVC — พลาสติกแข็ง (กันน้ำ/ทน UV)',   reel: false },
+  HDPE: { short: 'HDPE', name: 'HDPE/PE — ท่อฝังดิน (ม้วน)',          reel: true  },
+  FMC:  { short: 'FMC',  name: 'ท่ออ่อน (Flexible)',                  reel: false },
+};
+const ENV_DEFAULT_PIPE = { indoor: 'EMT', outdoor: 'IMC', buried: 'HDPE' };
+// ชนิดท่อที่ใช้จริงของเส้นนี้ — override ที่ r.pipe (จากคลิกขวา) ก่อน ไม่งั้นค่าเริ่มต้นตามสภาพแวดล้อม
+function effPipe(r) {
+  return (r.pipe && PIPE_TYPES[r.pipe]) ? r.pipe : ENV_DEFAULT_PIPE[r.env || 'outdoor'];
+}
+
 // ท่อร้อยสาย EMT (เส้นผ่านศูนย์กลางภายใน มม.)
 const CONDUITS = [
   { label: '20 มม. (3/4")',  idmm: 20.9 },
@@ -176,10 +191,11 @@ function conduitAnalysis() {
     if (routeLenM(r) == null || isWireless(r)) continue; // ลิงก์ไร้สายไม่มีท่อ
     const cable = CABLES[effCable(r)];
     const env = r.env || 'outdoor';
+    const pipe = effPipe(r);
     for (let i = 1; i < r.points.length; i++) {
       const a = r.points[i - 1], b = r.points[i];
       if (dist(a, b) < 0.5) continue;
-      segList.push({ a, b, od: cable.od, env, routeId: r.id });
+      segList.push({ a, b, od: cable.od, env, pipe, routeId: r.id });
     }
   }
   // จัดกลุ่มช่วงที่ "เดินแนวเดียวกัน" — ต้อง (1) ทิศเกือบขนานกัน (ต่างไม่เกิน ~10° กันจับคู่กับ
@@ -198,7 +214,7 @@ function conduitAnalysis() {
   const find = i => (parent[i] === i ? i : (parent[i] = find(parent[i])));
   for (let i = 0; i < segList.length; i++)
     for (let j = i + 1; j < segList.length; j++) {
-      if (segList[i].env !== segList[j].env || !sameConduit(segList[i], segList[j])) continue;
+      if (segList[i].env !== segList[j].env || segList[i].pipe !== segList[j].pipe || !sameConduit(segList[i], segList[j])) continue;
       const a = find(i), b = find(j);
       if (a !== b) parent[a] = b;
     }
@@ -230,7 +246,7 @@ function conduitAnalysis() {
       if (!covering.length) continue;
       const routeIds = [...new Set(covering.map(s => s.routeId))].sort((a, b) => a - b);
       const ods = routeIds.map(id => covering.find(s => s.routeId === id).od);
-      micro.push({ t0, t1, env: covering[0].env, routeIds, ods });
+      micro.push({ t0, t1, env: covering[0].env, pipe: covering[0].pipe, routeIds, ods });
     }
     // รวมช่วงติดกันที่มีชุดสายเดียวกันเข้าเป็นท่อเดียว
     for (let i = 0; i < micro.length; i++) {
@@ -241,14 +257,14 @@ function conduitAnalysis() {
       const p0 = { x: d * nx + m0.t0 * ux, y: d * ny + m0.t0 * uy };
       const p1 = { x: d * nx + m1.t1 * ux, y: d * ny + m1.t1 * uy };
       const size = conduitSizeForOds(m0.ods);
-      runs.push({ env: m0.env, p0, p1, lenPx: m1.t1 - m0.t0, count: m0.routeIds.length, sizeIdx: size.idx, size: size.label, routeIds: m0.routeIds });
+      runs.push({ env: m0.env, pipe: m0.pipe, p0, p1, lenPx: m1.t1 - m0.t0, count: m0.routeIds.length, sizeIdx: size.idx, size: size.label, routeIds: m0.routeIds });
       i = j;
     }
   }
   // รวม run ที่ชุดสายเหมือนกันและปลายต่อเนื่องกัน (ท่อเส้นเดียวเดินต่อผ่านจุดหักมุม/โค้ง)
   // เป็นเส้นทาง polyline เดียว — ไม่งั้นแนวที่เลี้ยวจะถูกแสดงเป็นหลายป้ายทั้งที่เป็นท่อเดียวกัน
   runs.forEach(r => { r.pts = [r.p0, r.p1]; });
-  const joinKey = r => r.env + '|' + r.routeIds.join(',');
+  const joinKey = r => r.env + '|' + r.pipe + '|' + r.routeIds.join(',');
   let joined = true;
   while (joined) {
     joined = false;
@@ -275,10 +291,10 @@ function conduitAnalysis() {
   return runs;
 }
 
-function conduitBends(env) {
+function conduitBends(env, pipe) {
   const seen = new Set();
   for (const r of state.routes) {
-    if ((r.env || 'outdoor') !== env || routeLenM(r) == null) continue;
+    if ((r.env || 'outdoor') !== env || routeLenM(r) == null || isWireless(r) || effPipe(r) !== pipe) continue;
     for (let i = 1; i < r.points.length - 1; i++) {
       seen.add(Math.round(r.points[i].x) + ',' + Math.round(r.points[i].y));
     }
@@ -1205,7 +1221,7 @@ function drawConduitOverlay(g, proj, k, mode, screen) {
         ? proj({ x: midW.x + off.x, y: midW.y + off.y })
         : { x: mid.x - uy * side * 52 * k, y: mid.y + ux * side * 52 * k };
       rect = conduitCallout(g, mid, center, [
-        `${ENVS[run.env].short} ${run.size}`,
+        `${PIPE_TYPES[run.pipe].short} ${run.size}`,
         cableLine,
         `ยาว ${Lm.toFixed(0)} ม.`,
       ], color, k, runSel);
@@ -1215,7 +1231,7 @@ function drawConduitOverlay(g, proj, k, mode, screen) {
         ? proj({ x: midW.x + off.x, y: midW.y + off.y })
         : { x: mid.x, y: mid.y + 18 * k };
       rect = pill(g, pos,
-        `${ENVS[run.env].short} ${run.size.replace(' ×หลายท่อ', '')} · ${cableLine} · ${Lm.toFixed(0)} ม.`, color, k * 0.9, runSel);
+        `${PIPE_TYPES[run.pipe].short} ${run.size.replace(' ×หลายท่อ', '')} · ${cableLine} · ${Lm.toFixed(0)} ม.`, color, k * 0.9, runSel);
     }
     if (screen && rect) conduitLabelHits.push({ ...rect, key, midW });
   });
@@ -1645,10 +1661,42 @@ canvas.addEventListener('contextmenu', e => {
     if (state.wallDraft.points.length > 1) state.wallDraft.points.pop();
     else state.wallDraft = null;
     draw();
-  } else if (state.mode !== 'select') {
+  } else if (state.mode === 'select') {
+    // คลิกขวาที่เส้นสาย → เมนูเลือกชนิดท่อ
+    const r = hitRoute(mousePos(e));
+    if (r && !isWireless(r)) { state.selected = { kind: 'route', id: r.id }; renderTable(); draw(); showPipeMenu(r, e.clientX, e.clientY); }
+    else hidePipeMenu();
+  } else {
     setMode('select');
   }
 });
+
+// เมนูคลิกขวาเลือกชนิดท่อของเส้นสาย
+function showPipeMenu(route, cx, cy) {
+  const menu = $('#ctxMenu');
+  const cur = effPipe(route);
+  const auto = ENV_DEFAULT_PIPE[route.env || 'outdoor'];
+  const opts = [`<div class="ctx-head">ชนิดท่อของ ${routeLabel(route)}</div>`,
+    `<button data-pipe="" class="${route.pipe ? '' : 'active'}">อัตโนมัติ (ตามสภาพแวดล้อม → ${PIPE_TYPES[auto].short})</button>`];
+  for (const key of Object.keys(PIPE_TYPES))
+    opts.push(`<button data-pipe="${key}" class="${route.pipe === key ? 'active' : ''}">${PIPE_TYPES[key].name}</button>`);
+  menu.innerHTML = opts.join('');
+  menu.classList.remove('hidden');
+  // จัดตำแหน่งไม่ให้ล้นจอ
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  menu.style.left = Math.max(6, Math.min(cx, window.innerWidth - mw - 6)) + 'px';
+  menu.style.top = Math.max(6, Math.min(cy, window.innerHeight - mh - 6)) + 'px';
+  menu.querySelectorAll('button[data-pipe]').forEach(btn => btn.addEventListener('click', () => {
+    const key = btn.dataset.pipe;
+    if (key) route.pipe = key; else delete route.pipe;
+    hidePipeMenu();
+    refresh();
+    $('#statusHint').textContent = `ตั้งชนิดท่อของ ${routeLabel(route)} เป็น ${PIPE_TYPES[effPipe(route)].short}${route.pipe ? '' : ' (อัตโนมัติ)'}`;
+  }));
+}
+function hidePipeMenu() { const m = $('#ctxMenu'); if (m) m.classList.add('hidden'); }
+window.addEventListener('mousedown', e => { if (!e.target.closest('#ctxMenu')) hidePipeMenu(); });
+window.addEventListener('wheel', hidePipeMenu, { passive: true });
 
 canvas.addEventListener('dblclick', () => {
   if (state.wallDraft) commitWall();
@@ -1657,6 +1705,7 @@ canvas.addEventListener('dblclick', () => {
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key === 'Escape') {
+    if (!$('#ctxMenu').classList.contains('hidden')) { hidePipeMenu(); return; }
     if (state.altView) clearAlts();
     else if (state.wallDraft) commitWall();
     else if (state.draft) { state.draft = null; updateHint(); draw(); }
@@ -1970,8 +2019,8 @@ function renderTable() {
       </td>
       <td class="num">${L != null ? L.toFixed(1) : '—'}</td>
       <td class="num">${cable.wireless ? '—' : (L != null ? purchaseLen(L) : '—')}</td>
-      <td>${cable.wireless ? '<span class="muted">ไร้สาย (ไม่มีท่อ)</span>' : `${ENVS[env].short} ${conduitFor(1, cable.od)}<br>
-        <select data-env="${r.id}" title="สภาพแวดล้อมการติดตั้ง → ชนิดท่อ">
+      <td>${cable.wireless ? '<span class="muted">ไร้สาย (ไม่มีท่อ)</span>' : `<span class="cond-pipe" title="คลิกขวาที่เส้นบนแบบแปลนเพื่อเปลี่ยนชนิดท่อ">${PIPE_TYPES[effPipe(r)].short}</span> ${conduitFor(1, cable.od)}${r.pipe ? ' <span class="pipe-badge" title="กำหนดชนิดท่อเอง">●</span>' : ''}<br>
+        <select data-env="${r.id}" title="สภาพแวดล้อมการติดตั้ง (ชนิดท่อค่าเริ่มต้น + อุปกรณ์ประกอบ)">
           <option value="indoor"${env === 'indoor' ? ' selected' : ''}>ในร่ม·EMT</option>
           <option value="outdoor"${env === 'outdoor' ? ' selected' : ''}>กลางแจ้ง·IMC</option>
           <option value="buried"${env === 'buried' ? ' selected' : ''}>ฝังดิน·HDPE</option>
@@ -2185,7 +2234,8 @@ function conduitSummaryData() {
   const runs = conduitAnalysis();
   const groups = {};
   for (const run of runs) {
-    const g = groups[run.env] || (groups[run.env] = { totalLen: 0, bySize: new Map() });
+    const key = run.env + '|' + run.pipe;
+    const g = groups[key] || (groups[key] = { env: run.env, pipe: run.pipe, totalLen: 0, bySize: new Map() });
     const Lm = run.lenPx / state.pxPerM;
     g.totalLen += Lm;
     const sz = g.bySize.get(run.size) || { len: 0, maxCount: 0, idx: run.sizeIdx };
@@ -2193,23 +2243,24 @@ function conduitSummaryData() {
     sz.maxCount = Math.max(sz.maxCount, run.count);
     g.bySize.set(run.size, sz);
   }
-  for (const env of Object.keys(groups)) {
-    const g = groups[env];
-    g.routes = state.routes.filter(r => (r.env || 'outdoor') === env && routeLenM(r) != null && !isWireless(r)).length;
+  for (const key of Object.keys(groups)) {
+    const g = groups[key];
+    g.routes = state.routes.filter(r => (r.env || 'outdoor') === g.env && effPipe(r) === g.pipe && routeLenM(r) != null && !isWireless(r)).length;
     g.pull = Math.max(0, Math.ceil(g.totalLen / 30) - 1);   // กล่องพักสายทุก ~30 ม.
     g.hand = Math.max(0, Math.ceil(g.totalLen / 50) - 1);   // บ่อพักใต้ดินทุก ~50 ม.
-    g.bends = conduitBends(env);
+    g.bends = conduitBends(g.env, g.pipe);
   }
   return groups;
 }
 
-function conduitRows(env, g) {
+function conduitRows(g) {
+  const env = g.env, reel = PIPE_TYPES[g.pipe].reel;
   const sizes = [...g.bySize.entries()].sort((a, b) => a[1].idx - b[1].idx);
-  const pipeLabel = env === 'indoor' ? 'ท่อ EMT' : env === 'outdoor' ? 'ท่อ IMC/uPVC กันน้ำ' : 'ท่อ HDPE/PE';
+  const pipeLabel = 'ท่อ ' + PIPE_TYPES[g.pipe].short;
   const rows = [];
   let totalSticks = 0;
   sizes.forEach(([size, d]) => {
-    if (env === 'buried') {
+    if (reel) { // ท่อม้วน (HDPE/PE)
       const reels = Math.ceil(d.len / 100);
       rows.push([`${pipeLabel} ${size} (สูงสุด ${d.maxCount} สาย/ท่อ)`, `${reels} ม้วน (~${Math.ceil(d.len)} ม.)`]);
       totalSticks += reels;
@@ -2247,13 +2298,14 @@ function conduitRows(env, g) {
 
 function conduitHTML() {
   const groups = conduitSummaryData();
-  const keys = ['indoor', 'outdoor', 'buried'].filter(k => groups[k]);
+  const envOrder = { indoor: 0, outdoor: 1, buried: 2 };
+  const keys = Object.keys(groups).sort((a, b) => (envOrder[groups[a].env] - envOrder[groups[b].env]) || groups[a].pipe.localeCompare(groups[b].pipe));
   if (!keys.length)
-    return '<p class="muted">ยังไม่มีแนวเดินสายที่วัดระยะได้ — เลือกสภาพแวดล้อมของแต่ละเส้น (ในร่ม/กลางแจ้ง/ฝังดิน) ได้ในตารางการเชื่อมต่อ</p>';
+    return '<p class="muted">ยังไม่มีแนวเดินสายที่วัดระยะได้ — เลือกสภาพแวดล้อมในตารางการเชื่อมต่อ หรือคลิกขวาที่เส้นสายเพื่อเลือกชนิดท่อ</p>';
   return keys.map(k => {
     const g = groups[k];
-    return `<h4 class="env-h">${ENVS[k].name} — ท่อ ${ENVS[k].pipe} (${g.routes} เส้นทาง, รวม ~${Math.ceil(g.totalLen)} ม. ของท่อจริงหลังนับสายทับกัน)</h4>
-      <table><tbody>${conduitRows(k, g).map(r =>
+    return `<h4 class="env-h">${ENVS[g.env].name} — ${PIPE_TYPES[g.pipe].name} (${g.routes} เส้นทาง, รวม ~${Math.ceil(g.totalLen)} ม. ของท่อจริงหลังนับสายทับกัน)</h4>
+      <table><tbody>${conduitRows(g).map(r =>
         `<tr><td>${r[0]}</td><td class="num">${r[1]}</td></tr>`).join('')}</tbody></table>`;
   }).join('');
 }
@@ -2382,7 +2434,7 @@ function buildReport() {
       <td><span class="cable-tag">${cable.name}</span></td>
       <td style="text-align:right">${L != null ? L.toFixed(1) : '—'}</td>
       <td style="text-align:right">${cable.wireless ? '—' : (L != null ? purchaseLen(L) : '—')}</td>
-      <td>${cable.wireless ? 'ไร้สาย (ไม่มีท่อ)' : `${ENVS[env].short} ${conduitFor(1, cable.od)} (${ENVS[env].name})`}</td>
+      <td>${cable.wireless ? 'ไร้สาย (ไม่มีท่อ)' : `${PIPE_TYPES[effPipe(r)].short} ${conduitFor(1, cable.od)} (${ENVS[env].name})`}</td>
       <td>${notes.join(' · ') || '—'}</td></tr>`;
   }).join('');
 
