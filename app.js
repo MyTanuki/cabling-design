@@ -1794,7 +1794,7 @@ function conduitSummaryData() {
   }
   for (const env of Object.keys(groups)) {
     const g = groups[env];
-    g.routes = state.routes.filter(r => (r.env || 'outdoor') === env && routeLenM(r) != null).length;
+    g.routes = state.routes.filter(r => (r.env || 'outdoor') === env && routeLenM(r) != null && !isWireless(r)).length;
     g.pull = Math.max(0, Math.ceil(g.totalLen / 30) - 1);   // กล่องพักสายทุก ~30 ม.
     g.hand = Math.max(0, Math.ceil(g.totalLen / 50) - 1);   // บ่อพักใต้ดินทุก ~50 ม.
     g.bends = conduitBends(env);
