@@ -17,6 +17,7 @@ const wrap = $('#canvasWrap');
 const CAT6_MAX = 180;            // เมตร — เกินนี้ต้องใช้ Fiber
 const TIA_CH_MAX = 100;          // เมตร — channel limit ตาม TIA-568
 const BRANCH_MAX_M = 10;         // เมตร — จุดติดตั้งห่างแนวท่อไม่เกินนี้จึง branch จากแนวเดิมได้
+const PATCH_MAX_M = 4;           // เมตร — ลิงก์สั้นมาก (ตู้เดียวกัน เช่น ONU→DSW) ต่อตรงได้ นอกนั้นเดินตามแนวท่อ
 const SLACK_FACTOR = 1.10;       // เผื่อความยาวสาย 10%
 const SLACK_ENDS = 10;           // service loop ปลายทางรวม (ม.)
 
@@ -417,6 +418,7 @@ function makeRouter(devs) {
       if (r) { splits[i].push(r.t); splits[j].push(r.u); }
     }
   const branchPx = (state.pxPerM ? BRANCH_MAX_M * state.pxPerM : 30) + 0.5; // +epsilon กันปัดเศษ
+  const patchPx = (state.pxPerM ? PATCH_MAX_M * state.pxPerM : 12) + 0.5;   // ระยะ "ต่อตรง" สำหรับลิงก์สั้นมาก
   // อุปกรณ์เชื่อมเข้าขอบอาคารได้หลายเส้น (สูงสุด 4 เส้นที่ระยะใกล้เคียงกับเส้นที่ใกล้สุด)
   const drops = [];
   devs.forEach(d => {
@@ -485,18 +487,20 @@ function makeRouter(devs) {
     return L;
   };
   const keysPts = keys => simplifyPts(keys.map(k => adj.get(k).p));
-  // ห้ามเดินนอกแนวอาคาร/แนวท่อ — ข้อยกเว้นเดียว: จุดสองจุดใกล้กันมาก (≤ BRANCH_MAX_M
-  // เช่น ONU→DSW ในตู้เดียวกัน) ต่อตรงแบบ patch ได้
+  // ห้ามเดินนอกแนวอาคาร/แนวท่อ — เดินตามแนวท่อเสมอถ้ากราฟต่อถึงกัน
+  // ต่อตรงได้เฉพาะ: (1) ลิงก์สั้นมาก ≤ PATCH_MAX_M (ตู้เดียวกัน) หรือ (2) กราฟไม่ต่อถึงแต่ยังอยู่ในระยะ branch
   return {
     // คืนจุดเส้นทาง หรือ null ถ้าต้องเดินนอกแนว (ผู้เรียกต้องข้ามการเชื่อมนี้)
     path(a, b) {
-      const direct = dist(a, b) <= branchPx ? [{ x: a.x, y: a.y }, { x: b.x, y: b.y }] : null;
+      const straight = dist(a, b);
+      const patch = straight <= patchPx ? [{ x: a.x, y: a.y }, { x: b.x, y: b.y }] : null;
+      const branch = straight <= branchPx ? [{ x: a.x, y: a.y }, { x: b.x, y: b.y }] : null;
       const ka = keyOf(a), kb = keyOf(b);
-      if (ka === kb || !adj.has(ka) || !adj.has(kb)) return direct;
+      if (ka === kb || !adj.has(ka) || !adj.has(kb)) return branch; // ไม่เชื่อมกราฟ → ต่อตรงเฉพาะระยะ branch
       const keys = rawPath(ka, kb, reuseBias.size ? reuseBias : null);
-      if (!keys) return direct; // กราฟไม่ต่อถึงกัน — ยอมให้เฉพาะระยะใกล้มาก
-      if (direct && polyLenPx(direct) < keysLen(keys)) return direct;
-      return keysPts(keys);
+      if (!keys) return branch; // กราฟไม่ต่อถึงกัน — ยอมให้เฉพาะระยะ branch
+      if (patch && polyLenPx(patch) < keysLen(keys)) return patch; // เฉพาะลิงก์สั้นมากเท่านั้นที่ต่อตรง
+      return keysPts(keys); // ปกติ: เดินตามแนวท่อ
     },
     // เรียกหลังจาก path(a,b) ถูกใช้จริงแล้ว — กดต้นทุนช่วงที่เพิ่งเดินผ่านให้ถูกลง
     // เพื่อให้สายเส้นถัดไปเลือกใช้ท่อร่วมเดิมเมื่อเป็นไปได้ (ลดจำนวนท่อที่ต้องเดินแยก)
@@ -517,7 +521,9 @@ function makeRouter(devs) {
       const g = (adj.has(ka) && adj.has(kb))
         ? (dijkstra(ka).distM.get(kb) ?? Infinity)
         : Infinity;
-      return euclid <= branchPx ? Math.min(euclid, g) : g;
+      // ต่อถึงตามแนวท่อ → ใช้ระยะแนวท่อ (ลิงก์สั้นมากค่อยเทียบเส้นตรง) · ไม่ต่อถึง → branch หรือไปไม่ถึง
+      if (isFinite(g)) return euclid <= patchPx ? Math.min(euclid, g) : g;
+      return euclid <= branchPx ? euclid : Infinity;
     },
     // แนวเดินสายทางเลือก: หาเส้นทางสำรองโดยกดน้ำหนักเส้นทางที่พบแล้ว (penalty method)
     alts(a, b, maxAlt = 3) {
