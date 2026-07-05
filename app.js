@@ -581,9 +581,12 @@ function kmeansCenters(pts, k, fixed) {
 }
 function autoPlaceSwitches() {
   const cams = state.devices.filter(d => d.type === 'cam');
+  // WAP ก็ต้องมี PoE Switch จ่ายไฟ + uplink เช่นกัน → รวมเป็น endpoint ที่ต้องมีสวิตช์ในระยะ
+  const waps = state.devices.filter(d => d.type === 'wap');
+  const endpoints = [...cams, ...waps];
   const onu = state.devices.find(d => d.type === 'onu');
-  if (!onu || !cams.length) {
-    $('#statusHint').textContent = 'ต้องวางจุด ONU และกล้องอย่างน้อย 1 ตัวก่อน (ขั้นตอนที่ 3)';
+  if (!onu || !endpoints.length) {
+    $('#statusHint').textContent = 'ต้องวางจุด ONU และกล้อง/WAP อย่างน้อย 1 ตัวก่อน (ขั้นตอนที่ 3)';
     return;
   }
   // ล้างสวิตช์ที่วางอัตโนมัติรอบก่อน + เส้นที่เกี่ยวข้อง
@@ -593,20 +596,23 @@ function autoPlaceSwitches() {
 
   const manualPsw = state.devices.filter(d => d.type === 'psw');
   const segs = wallSegs();
-  let k = Math.max(manualPsw.length || 1, Math.ceil(cams.length / 8));
+  const branchPx = state.pxPerM ? BRANCH_MAX_M * state.pxPerM + 0.5 : Infinity;
+  // จุดที่แตะแนวอาคาร/ท่อได้ (มี PSW ตัวใหม่ช่วยจ่ายได้) — จุดที่ไกลทุกแนวเพิ่มสวิตช์ก็ไม่ช่วย
+  const nearWall = p => !segs.length || segs.reduce((m, s) => Math.min(m, projToSeg(p, s[0], s[1]).d), Infinity) <= branchPx;
+  let k = Math.max(manualPsw.length || 1, Math.ceil(endpoints.length / 8));
   let placed = [];
-  // เพิ่มจำนวน PSW จนกล้องทุกตัวอยู่ในระยะ CAT6 ตามเส้นทางเดินจริง (เลาะขอบอาคาร)
+  // เพิ่มจำนวน PSW จนกล้อง/WAP ทุกตัว (ที่แตะแนวได้) อยู่ในระยะ CAT6 ตามเส้นทางเดินจริง
   for (let attempt = 0; ; attempt++) {
-    const centers = kmeansCenters(cams, k, manualPsw);
+    const centers = kmeansCenters(endpoints, k, manualPsw);
     placed = centers.slice(manualPsw.length).map(c => {
       if (segs.length) { const n = nearestOnSegments(c, segs); if (n) return { x: n.proj.x, y: n.proj.y }; } // ยึด PSW เข้ากับขอบอาคาร
       return { x: c.x, y: c.y };
     });
-    if (!state.pxPerM || k >= cams.length || attempt >= 4) break;
+    if (!state.pxPerM || k >= endpoints.length || attempt >= 4) break;
     const all = [...manualPsw.map(m => ({ x: m.x, y: m.y })), ...placed];
-    const router = makeRouter([...all, ...cams.map(c => ({ x: c.x, y: c.y }))]);
-    // กล้องที่อยู่นอกแนวท่อ (ระยะ Infinity) ไม่นำมาคิด — เพิ่มสวิตช์ช่วยอะไรไม่ได้
-    const reach = cams.map(c => Math.min(...all.map(p => router.dist(c, p)))).filter(isFinite);
+    const router = makeRouter([...all, ...endpoints.map(e => ({ x: e.x, y: e.y }))]);
+    // จุดที่แตะแนวได้แต่ยังไม่มีสวิตช์ในระยะ (รวมจุดคนละอาคารที่ระยะ Infinity) → ต้องเพิ่มสวิตช์
+    const reach = endpoints.filter(nearWall).map(e => Math.min(...all.map(p => router.dist(e, p))));
     const worst = reach.length ? Math.max(...reach) : 0;
     if (worst / state.pxPerM <= CAT6_MAX - 10) break;
     k++;
@@ -620,7 +626,7 @@ function autoPlaceSwitches() {
   }
   refresh();
   const nP = state.devices.filter(d => d.type === 'psw').length;
-  $('#statusHint').textContent = `วางสวิตช์แล้ว: PoE SW ${nP} ตัว (กล้อง ${cams.length} ตัว, ≤8 ตัว/สวิตช์) — ลากย้ายปรับได้ แล้วกด "คำนวณแนวสายอัตโนมัติ"`;
+  $('#statusHint').textContent = `วางสวิตช์แล้ว: PoE SW ${nP} ตัว (กล้อง ${cams.length} + WAP ${waps.length}, ≤8 ตัว/สวิตช์) — ลากย้ายปรับได้ แล้วกด "คำนวณแนวสายอัตโนมัติ"`;
 }
 
 /* ============================================================
@@ -703,12 +709,13 @@ function autoRouteAll() {
   const dsw = state.devices.find(d => d.type === 'dsw');
   const psws = state.devices.filter(d => d.type === 'psw');
   const cams = state.devices.filter(d => d.type === 'cam');
+  const waps = state.devices.filter(d => d.type === 'wap');
   if (!cams.length || !psws.length) {
     $('#statusHint').textContent = 'ต้องมีกล้องและ PoE Switch ก่อน — วางเองหรือกด "วาง DSW/PSW อัตโนมัติ"';
     return;
   }
   state.routes = state.routes.filter(r => !r.auto); // คำนวณใหม่แบบ idempotent
-  const router = makeRouter([onu, dsw, ...psws, ...cams].filter(Boolean).map(d => ({ x: d.x, y: d.y })));
+  const router = makeRouter([onu, dsw, ...psws, ...cams, ...waps].filter(Boolean).map(d => ({ x: d.x, y: d.y })));
   const has = (a, b) => state.routes.some(r =>
     (r.fromId === a.id && r.toId === b.id) || (r.fromId === b.id && r.toId === a.id));
   const skipped = [];
@@ -750,6 +757,31 @@ function autoRouteAll() {
     const pick = t.ds.find(x => (load.get(x.p.id) || 0) < 8) || t.ds[0];
     load.set(pick.p.id, (load.get(pick.p.id) || 0) + 1);
     n += mk(pick.p, t.c) ? 1 : 0;
+  }
+  // จ่าย uplink ให้ WAP ที่ยังไม่มีสายเข้าสวิตช์: ต่อสาย (CAT6/Fiber) ไปสวิตช์ที่ใกล้สุด (PSW ก่อน, DSW สำรอง)
+  const uplinkSwitches = [...psws, dsw].filter(Boolean);
+  const cabledWap = new Set();
+  state.routes.forEach(r => {
+    const f = deviceById(r.fromId), t = deviceById(r.toId);
+    if (!f || !t) return;
+    const wp = f.type === 'wap' ? f : t.type === 'wap' ? t : null;
+    const sw = (f.type === 'psw' || f.type === 'dsw') ? f : ((t.type === 'psw' || t.type === 'dsw') ? t : null);
+    if (wp && sw) cabledWap.add(wp.id);
+  });
+  const wapTodo = waps.filter(w => !cabledWap.has(w.id))
+    .map(w => ({
+      w,
+      ds: uplinkSwitches.map(p => ({ p, d: router.dist(w, p) }))
+        .filter(x => isFinite(x.d))
+        .sort((x, y) => x.d - y.d),
+    }))
+    .sort((x, y) => (x.ds.length ? x.ds[0].d : Infinity) - (y.ds.length ? y.ds[0].d : Infinity));
+  for (const t of wapTodo) {
+    if (!t.ds.length) { skipped.push(`${t.w.label} (ห่างแนวเกิน ${BRANCH_MAX_M} ม.)`); continue; }
+    // เลือก PSW ที่พอร์ตยังว่างก่อน; ถ้าไม่มีเลยใช้จุดใกล้สุด (อาจเป็น DSW)
+    const pick = t.ds.find(x => x.p.type === 'psw' && (load.get(x.p.id) || 0) < 8) || t.ds[0];
+    if (pick.p.type === 'psw') load.set(pick.p.id, (load.get(pick.p.id) || 0) + 1);
+    n += mk(pick.p, t.w) ? 1 : 0;
   }
   refresh();
   const skipMsg = skipped.length
