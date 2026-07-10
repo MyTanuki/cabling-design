@@ -1,10 +1,11 @@
-import {
-  createRouter, dist, polyLenPx, projToSeg, nearestOnSegments,
-  segIntersect, simplifyPts, samePath, BRANCH_MAX_M,
-} from './router.js';
-
 (() => {
 'use strict';
+
+// router.js เป็น classic script ที่ผูก API ไว้ที่ global CableRouter (ต้องโหลดก่อน app.js)
+const {
+  createRouter, dist, polyLenPx, projToSeg, nearestOnSegments,
+  segIntersect, simplifyPts, samePath, BRANCH_MAX_M,
+} = CableRouter;
 
 /* ============================================================
    CCTV Cabling Designer

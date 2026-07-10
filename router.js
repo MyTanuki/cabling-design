@@ -1,29 +1,35 @@
 /* ============================================================
    router.js — ตัวหาเส้นทางเดินสาย/ท่อ (graph + Dijkstra)
-   โมดูลอิสระ: ไม่พึ่ง global state / DOM — รับ segs, devs, pxPerM, ortho เป็นพารามิเตอร์
+   สคริปต์อิสระ: ไม่พึ่ง global state / DOM — รับ segs, devs, pxPerM, ortho เป็นพารามิเตอร์
    ยกมาจากแอป CCTV Cabling Designer เพื่อนำไปใช้ซ้ำในโครงการอื่นได้
    ------------------------------------------------------------
+   เป็น classic script (ไม่ใช่ ES module) เพื่อให้เปิดด้วย file:// ได้
+   และไม่พังเมื่อ HTML/JS ใน cache ไม่ตรงเวอร์ชันกัน
+   ------------------------------------------------------------
    วิธีใช้:
-     import { createRouter } from './router.js';
+     <script src="router.js"></script>   <!-- โหลดก่อนสคริปต์ที่เรียกใช้ -->
+     const { createRouter } = CableRouter;
      const segs = walls.flatMap(w => w.points.slice(1).map((p, i) => [w.points[i], p]));
      const router = createRouter(segs, devicePoints, { pxPerM: 2, ortho: true });
      const pts = router.path(a, b);   // {x,y}[] หรือ null ถ้าเดินตามแนวไม่ได้
    ============================================================ */
+(function (global) {
+'use strict';
 
 /* ---------- ค่าคงที่การเดินสาย (เมตร) ---------- */
-export const BRANCH_MAX_M = 10;   // จุดติดตั้งห่างแนวท่อไม่เกินนี้จึง branch จากแนวเดิมได้
-export const PATCH_MAX_M = 4;     // ลิงก์สั้นมาก (ตู้เดียวกัน เช่น ONU→DSW) ต่อตรงได้ นอกนั้นเดินตามแนวท่อ
-export const PATCH_DETOUR = 2.5;  // ต่อตรงเฉพาะเมื่อเดินตามท่อแล้วอ้อมไกลกว่าเส้นตรงเกินเท่านี้
+const BRANCH_MAX_M = 10;   // จุดติดตั้งห่างแนวท่อไม่เกินนี้จึง branch จากแนวเดิมได้
+const PATCH_MAX_M = 4;     // ลิงก์สั้นมาก (ตู้เดียวกัน เช่น ONU→DSW) ต่อตรงได้ นอกนั้นเดินตามแนวท่อ
+const PATCH_DETOUR = 2.5;  // ต่อตรงเฉพาะเมื่อเดินตามท่อแล้วอ้อมไกลกว่าเส้นตรงเกินเท่านี้
 
 /* ---------- เรขาคณิตล้วน (ไม่พึ่งอะไร) ---------- */
-export const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
-export function polyLenPx(points) {
+function polyLenPx(points) {
   let L = 0;
   for (let i = 1; i < points.length; i++) L += dist(points[i - 1], points[i]);
   return L;
 }
-export function projToSeg(p, a, b) {
+function projToSeg(p, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const l2 = dx * dx + dy * dy;
   let t = l2 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0;
@@ -31,7 +37,7 @@ export function projToSeg(p, a, b) {
   const proj = { x: a.x + t * dx, y: a.y + t * dy };
   return { t, proj, d: dist(p, proj) };
 }
-export function nearestOnSegments(p, segs) {
+function nearestOnSegments(p, segs) {
   let best = null;
   segs.forEach((s, i) => {
     const r = projToSeg(p, s[0], s[1]);
@@ -39,7 +45,7 @@ export function nearestOnSegments(p, segs) {
   });
   return best;
 }
-export function segIntersect(p1, p2, p3, p4) {
+function segIntersect(p1, p2, p3, p4) {
   const d = (p2.x - p1.x) * (p4.y - p3.y) - (p2.y - p1.y) * (p4.x - p3.x);
   if (Math.abs(d) < 1e-9) return null;
   const t = ((p3.x - p1.x) * (p4.y - p3.y) - (p3.y - p1.y) * (p4.x - p3.x)) / d;
@@ -47,7 +53,7 @@ export function segIntersect(p1, p2, p3, p4) {
   if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
   return { t, u };
 }
-export function simplifyPts(pts) {
+function simplifyPts(pts) {
   const out = [];
   for (const p of pts) {
     const l = out[out.length - 1];
@@ -60,14 +66,14 @@ export function simplifyPts(pts) {
   }
   return out.length >= 2 ? out : pts;
 }
-export function manhattanPts(a, b, ortho) {
+function manhattanPts(a, b, ortho) {
   const pts = [{ x: a.x, y: a.y }];
   if (ortho && Math.abs(a.x - b.x) > 1 && Math.abs(a.y - b.y) > 1)
     pts.push({ x: b.x, y: a.y });
   pts.push({ x: b.x, y: b.y });
   return pts;
 }
-export function samePath(a, b) {
+function samePath(a, b) {
   if (!a || !b || a.length !== b.length) return false;
   return a.every((p, i) => dist(p, b[i]) < 1);
 }
@@ -78,7 +84,7 @@ export function samePath(a, b) {
 // ไม่ใช่ช่วง drop จริง จึงห้ามดัดเป็นฉาก ไม่งั้นจะเกิดหนามย้อนกลับ/หลุดออกนอกแนวบนผนังเอียง
 // นอกจากนี้ ถ้าช่วง drop "ตั้งฉากกับแนวท่ออยู่แล้ว" (จุดฉาย perpendicular กลางช่วง) ก็คงไว้
 // ตามหลัก: สายแตกจากแนวท่อไปหาอุปกรณ์ต้องเดินตั้งฉากกับแนวท่อ — ไม่ดัดเป็นฉากตามแกนจอ
-export function orthoDrops(pts, aOnWall, bOnWall, ortho) {
+function orthoDrops(pts, aOnWall, bOnWall, ortho) {
   if (!ortho || pts.length < 3) return pts;
   const out = pts.map(p => ({ x: p.x, y: p.y }));
   // ช่วง drop (dropA→dropB) ตั้งฉากกับแนวท่อ (condA→condB) หรือไม่ (|cos| ≈ 0)
@@ -111,7 +117,7 @@ export function orthoDrops(pts, aOnWall, bOnWall, ortho) {
    (ให้ Dijkstra เลือกทางเข้า-ออกที่ทำให้เส้นรวมสั้นที่สุด)
    ถ้าไม่มีแนวท่อ (segs ว่าง) → เส้นตรงหักมุมฉาก (Manhattan)
    ตัวเลือก: pxPerM (px/เมตร สำหรับคำนวณระยะ branch/patch), ortho (บังคับหักมุมฉาก) */
-export function createRouter(segs, devs, { pxPerM = null, ortho = true } = {}) {
+function createRouter(segs, devs, { pxPerM = null, ortho = true } = {}) {
   if (!segs.length) {
     const alts = (a, b) => {
       const out = [{ points: manhattanPts(a, b, ortho) }];
@@ -281,3 +287,15 @@ export function createRouter(segs, devs, { pxPerM = null, ortho = true } = {}) {
     },
   };
 }
+
+/* ---------- เปิดใช้งานผ่าน global (classic script) ---------- */
+global.CableRouter = {
+  createRouter,
+  // เรขาคณิต (ใช้ซ้ำได้)
+  dist, polyLenPx, projToSeg, nearestOnSegments, segIntersect,
+  simplifyPts, samePath, manhattanPts, orthoDrops,
+  // ค่าคงที่
+  BRANCH_MAX_M, PATCH_MAX_M, PATCH_DETOUR,
+};
+
+})(typeof globalThis !== 'undefined' ? globalThis : self);
