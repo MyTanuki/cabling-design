@@ -1609,6 +1609,10 @@ function deleteSelected() {
 /* ============================================================
    image loading
    ============================================================ */
+// ภาพตัวอย่างเก็บในโฟลเดอร์ ./floor-plan (พาธมาจากโค้ด ไม่ได้เก็บในไฟล์บันทึก
+// งานเก่าที่บันทึกไว้แบบ imgSrcKind:'sample' จึงโหลดจากพาธใหม่ได้เอง)
+const SAMPLE_IMG = 'floor-plan/picture.jpg';
+
 function loadImage(src, kind) {
   const img = new Image();
   img.onload = () => {
@@ -1635,8 +1639,8 @@ function handleFile(file) {
 $('#fileInput').addEventListener('change', e => handleFile(e.target.files[0]));
 $('#btnUpload').addEventListener('click', () => $('#fileInput').click());
 $('#btnUpload2').addEventListener('click', () => $('#fileInput').click());
-$('#btnSample').addEventListener('click', () => loadImage('picture.jpg', 'sample'));
-$('#btnSample2').addEventListener('click', () => loadImage('picture.jpg', 'sample'));
+$('#btnSample').addEventListener('click', () => loadImage(SAMPLE_IMG, 'sample'));
+$('#btnSample2').addEventListener('click', () => loadImage(SAMPLE_IMG, 'sample'));
 
 ['dragover', 'dragleave', 'drop'].forEach(ev => {
   wrap.addEventListener(ev, e => {
@@ -2319,7 +2323,7 @@ function loadProjectByName(name) {
     nextId: d.nextId || 1, conduitLabelOffsets: d.conduitLabelOffsets || {},
     selected: null, draft: null, wallDraft: null, altView: null, projectName: name,
   });
-  if (d.imgSrcKind === 'sample') loadImage('picture.jpg', 'sample');
+  if (d.imgSrcKind === 'sample') loadImage(SAMPLE_IMG, 'sample');
   else if (d.imgDataUrl) loadImage(d.imgDataUrl, 'file');
   else { state.img = null; $('#dropHint').classList.remove('hidden'); }
   refresh();
@@ -2356,7 +2360,7 @@ function loadLocal() {
       nextId: d.nextId || 1,
       conduitLabelOffsets: d.conduitLabelOffsets || {},
     });
-    if (d.imgSrcKind === 'sample') loadImage('picture.jpg', 'sample');
+    if (d.imgSrcKind === 'sample') loadImage(SAMPLE_IMG, 'sample');
     else if (d.imgDataUrl) loadImage(d.imgDataUrl, 'file');
   } catch (e) { /* ข้อมูลเสีย — เริ่มใหม่ */ }
 }
