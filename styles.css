@@ -27,14 +27,22 @@ body {
 /* ---------- Top bar ---------- */
 #topbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
-  gap: 12px; flex-wrap: wrap;
+  padding: 4px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+  gap: 10px; flex-wrap: wrap;
 }
-.brand { display: flex; align-items: center; gap: 10px; }
-.brand-icon { font-size: 26px; }
-.brand h1 { margin: 0; font-size: 17px; }
-.brand p { margin: 0; font-size: 11.5px; color: var(--muted); }
-.top-actions { display: flex; gap: 8px; }
+/* หัวเรื่องแถวเดียว: ไอคอน + ชื่อ + คำอธิบาย (คำอธิบายตัดด้วย … เมื่อพื้นที่ไม่พอ) */
+.brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.brand-icon { font-size: 20px; }
+.brand > div { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.brand h1 { margin: 0; font-size: 15px; white-space: nowrap; }
+.brand p {
+  margin: 0; font-size: 11.5px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.top-actions { display: flex; gap: 6px; }
+.top-actions .btn { padding: 5px 10px; font-size: 12.5px; }
+/* จอไม่กว้างพอ: ซ่อนคำอธิบาย (ข้อความประดับ) ไม่ให้ header ตกบรรทัดจนสูงขึ้น */
+@media (max-width: 1200px) { .brand p { display: none; } }
 
 /* ---------- Buttons ---------- */
 .btn {
